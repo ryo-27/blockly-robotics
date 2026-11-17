@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Blockly Roboticsの設定・起動・通信・保存先を実装ファイルと結ぶシステムマップ。">
+  <title>システムマップ · Blockly Robotics</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="data.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <header class="header">
+    <a class="brand" href="#overview"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M9 2h6v6H9zM2 16h6v6H2zM16 16h6v6h-6zM12 8v4M5 16v-4h14v4"/></svg></span><span>Blockly Robotics<span class="brand-sub">システムマップ</span></span></a>
+    <div class="header-end"><span class="phase">Phase 1 · 実機確認済み</span><a class="readme" href="README.md">読み方と更新方法 ↗</a></div>
+  </header>
+  <div class="nav-bar">
+    <nav id="views" aria-label="マップの視点"></nav>
+    <div class="search-box"><label for="search">ファイル・機能を探す</label><input id="search" type="search" placeholder="例：SERVER_URL、認証、last_seen" autocomplete="off"><div id="search-results" hidden></div></div>
+  </div>
+  <main class="workspace">
+    <section class="map-area" aria-labelledby="view-title">
+      <header class="view-header"><div><p class="eyebrow" id="view-number">SYSTEM / 01</p><h1 id="view-title">全体構成</h1><p id="view-description"></p></div><div class="map-tools" id="map-tools"><button id="zoom-out" aria-label="縮小">−</button><output id="zoom-value" aria-live="polite">100%</output><button id="zoom-in" aria-label="拡大">＋</button><button id="fit">全体表示</button></div></header>
+      <div class="legend" id="legend"><span><i class="server"></i>サーバー</span><span><i class="data"></i>保存・状態</span><span><i class="robot"></i>ESP32・出力</span><span><i class="config"></i>設定</span><span><i class="planned"></i>未実装</span></div>
+      <div id="viewport" class="viewport" role="region" aria-label="構成図。要素と接続線を選択すると詳細を表示します" tabindex="0"><div id="sizer"><div id="world"><svg id="edges" viewBox="0 0 1040 740" aria-label="要素間の接続"></svg><div id="groups"></div><div id="nodes"></div></div></div></div>
+      <section id="file-index" hidden aria-label="ファイル索引"></section>
+      <section class="walkthrough" id="walkthrough" aria-labelledby="walk-title"><div class="walk-heading"><h2 id="walk-title">処理をたどる</h2><span id="step-counter"></span></div><div id="step-list"></div><div class="step-reading"><div id="step-text"></div><button id="next-step">次の手順 →</button></div></section>
+      <footer class="map-footer"><span>図はソースに基づく説明です。機体の稼働状態は取得しません。</span><span id="source-version"></span></footer>
+    </section>
+    <aside id="inspector" aria-labelledby="detail-title" tabindex="-1"><div id="detail-content"></div></aside>
+  </main>
+  <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+</body>
+</html>

@@ -1,0 +1,1755 @@
+{
+  "title": "Blockly Robotics システムマップ",
+  "phase": "Phase 1 · 実機確認済み",
+  "nodes": [
+    {
+      "id": "station",
+      "title": "ブラウザ・タブレット",
+      "kind": "client",
+      "summary": "Swagger UIで接続状態を確認する。",
+      "body": "Phase 1の操作入口はFastAPIの /docs。Authorizeにステーション用トークンを入力し、GET /api/robotsを実行する。子ども向けのBlockly画面はまだ存在しない。",
+      "inputs": [
+        "MacBookのLANアドレス:8000/docs",
+        "stationToken（Bearerの値）"
+      ],
+      "outputs": [
+        "ロボット一覧と接続状態"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/main.py",
+          "find": "@api.get(\"/api/robots\""
+        },
+        {
+          "path": "README.md",
+          "find": "右上のAuthorize"
+        }
+      ],
+      "facts": [
+        [
+          "アクセス先",
+          "http://<MacBookのLAN IP>:8000/docs"
+        ],
+        [
+          "接続条件",
+          "MacBookと端末が同じLANに参加"
+        ],
+        [
+          "注意",
+          "localhostはアクセスした端末自身を指す"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "API操作画面を開く",
+          "code": "/docs"
+        },
+        {
+          "label": "一覧用の認証",
+          "code": "stationToken"
+        },
+        {
+          "label": "接続状態を取得",
+          "code": "GET /api/robots"
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "title": "FastAPI",
+      "kind": "server",
+      "summary": "認証・JSON検証・処理の入口をまとめる。",
+      "body": "create_app()がAPIとStoreを組み立てる。起動時のlifespanで設定を読み、SQLiteを初期化する。GET /api/robotsはステーション認証、登録・Heartbeatは個体認証を通る。",
+      "inputs": [
+        "HTTPリクエスト",
+        "WorkshopConfig / Store"
+      ],
+      "outputs": [
+        "JSON応答またはHTTPエラー"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/main.py",
+          "find": "def create_app("
+        }
+      ],
+      "facts": [
+        [
+          "稼働場所",
+          "運営用MacBook"
+        ],
+        [
+          "待ち受け",
+          "uvicorn --host 0.0.0.0 --port 8000"
+        ],
+        [
+          "プロセス",
+          "単一プロセス。複数worker非対応"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "アプリを組み立てる",
+          "code": "create_app()"
+        },
+        {
+          "label": "起動時の準備",
+          "code": "lifespan → config / Store"
+        },
+        {
+          "label": "認証・型検証",
+          "code": "Depends / Pydantic"
+        },
+        {
+          "label": "保存処理へ渡す",
+          "code": "Store"
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "title": "ESP32通信ループ",
+      "kind": "robot",
+      "summary": "Wi-Fi経由で登録とHeartbeatを送る。",
+      "body": "setup()がWi-Fiを開始し、loop()が登録またはHeartbeatを送る。サーバーから機体へ直接接続する構成ではない。送信間隔は成功時500ms、失敗時は最大10秒へ伸ばす。",
+      "inputs": [
+        "robot_config.hの個体・Wi-Fi・接続先設定",
+        "HTTP応答"
+      ],
+      "outputs": [
+        "POST register / heartbeat",
+        "シリアル診断ログ"
+      ],
+      "sources": [
+        {
+          "path": "firmware/src/main.cpp",
+          "find": "bool contactServer()"
+        },
+        {
+          "path": "firmware/src/main.cpp",
+          "find": "void loop()"
+        }
+      ],
+      "facts": [
+        [
+          "ファームウェア",
+          "0.1.0-phase1"
+        ],
+        [
+          "命令取得",
+          "未実装。現在は接続状態の報告のみ"
+        ],
+        [
+          "通信中",
+          "モーターは停止を維持"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "接続セッションなし",
+          "code": "POST /register"
+        },
+        {
+          "label": "登録応答を保持",
+          "code": "sessionId"
+        },
+        {
+          "label": "接続中の報告",
+          "code": "POST /heartbeat"
+        },
+        {
+          "label": "次の送信まで待つ",
+          "code": "500ms / 再試行"
+        }
+      ]
+    },
+    {
+      "id": "store",
+      "title": "Store",
+      "kind": "data",
+      "summary": "SQLiteへの更新と状態の算出を担当する。",
+      "body": "APIは保存の詳細をStoreへ委ねる。各操作で接続を開きBEGIN IMMEDIATEを開始し、終了時にcommitまたはrollbackして接続を閉じる。認証・セッション・sequenceもここで照合する。",
+      "inputs": [
+        "個体ID・bootId・sessionId・sequence",
+        "サーバー時刻"
+      ],
+      "outputs": [
+        "個体情報の保存",
+        "IDLE / OFFLINEの一覧"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/store.py",
+          "find": "class Store:"
+        },
+        {
+          "path": "apps/server/app/store.py",
+          "find": "def connection("
+        }
+      ],
+      "flow": [
+        {
+          "label": "SQLite接続を開く",
+          "code": "connection()"
+        },
+        {
+          "label": "更新を直列化",
+          "code": "BEGIN IMMEDIATE"
+        },
+        {
+          "label": "照合・読み書き",
+          "code": "SQL"
+        },
+        {
+          "label": "確定して接続を閉じる",
+          "code": "COMMIT / ROLLBACK"
+        }
+      ]
+    },
+    {
+      "id": "database",
+      "title": "SQLite / robots",
+      "kind": "data",
+      "summary": "1個体1行で接続情報を保持する。",
+      "body": "現在作成する表はrobotsだけ。status列はなく、last_seenと現在時刻から接続状態を都度求める。登録対象は設定から読み込む。ProgramsやReservationsなどは未実装。",
+      "inputs": [
+        "StoreからのSQL"
+      ],
+      "outputs": [
+        "個体名・認証ハッシュ・接続時刻・セッション情報"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/store.py",
+          "find": "CREATE TABLE IF NOT EXISTS robots"
+        }
+      ],
+      "facts": [
+        [
+          "既定のファイル",
+          "data/workshop.sqlite3"
+        ],
+        [
+          "個体情報",
+          "id / display_name / token_hash / enabled"
+        ],
+        [
+          "接続情報",
+          "boot_id / session_id / sequence / last_seen / firmware_version"
+        ],
+        [
+          "秘密情報",
+          "個体トークンはSHA-256を保存。元の値は保存しない"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "サーバーで許可する個体",
+          "code": "robots[].id"
+        },
+        {
+          "label": "1個体1行で保存",
+          "code": "robots"
+        },
+        {
+          "label": "一覧取得時に接続を判定",
+          "code": "last_seen → IDLE / OFFLINE"
+        }
+      ]
+    },
+    {
+      "id": "motors",
+      "title": "モーター出力",
+      "kind": "robot",
+      "summary": "GPIOをLOWにして停止を維持する。",
+      "body": "initializeMotors()は出力値をLOWにしてから出力モードへ設定する。loop()でもstopMotors()を呼ぶ。DRV8835のIN/INモードでLOW/LOWは空転停止。現在は前進・旋回コードを持たない。",
+      "inputs": [
+        "initializeMotors() / stopMotors()"
+      ],
+      "outputs": [
+        "GPIO25 / 26 / 27 / 14 = LOW"
+      ],
+      "sources": [
+        {
+          "path": "firmware/src/motor_control.cpp",
+          "find": "void initializeMotors()"
+        },
+        {
+          "path": "firmware/src/motor_control.cpp",
+          "find": "void stopMotors()"
+        },
+        {
+          "path": "firmware/src/main.cpp",
+          "find": "void setup()"
+        }
+      ],
+      "facts": [
+        [
+          "起動時",
+          "通信処理より先に停止出力を初期化"
+        ],
+        [
+          "停止の意味",
+          "位置やモーター電流を計測した結果ではない"
+        ],
+        [
+          "Phase 2前提",
+          "HTTPを独立させ、停止監視を妨げない構造へ変更"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "起動直後",
+          "code": "initializeMotors()"
+        },
+        {
+          "label": "出力モードを設定",
+          "code": "GPIO 25 / 26 / 27 / 14"
+        },
+        {
+          "label": "毎ループ停止を維持",
+          "code": "stopMotors() → LOW"
+        }
+      ]
+    },
+    {
+      "id": "future",
+      "title": "Blockly・予約・実行",
+      "kind": "planned",
+      "summary": "後続フェーズで追加する。",
+      "body": "React / Blockly、プログラム保存、AST変換、実行命令列、予約、実行ID、走行制御は設計原本にある将来の機能。Phase 1の通信経路には接続しない。",
+      "inputs": [
+        "設計仕様書のPhase 2〜6"
+      ],
+      "outputs": [
+        "これから実装する機能"
+      ],
+      "sources": [
+        {
+          "path": "docs/system-design.md",
+          "find": "# 18. 開発フェーズ"
+        }
+      ],
+      "status": "planned",
+      "flow": [
+        {
+          "label": "実行エンジンを追加",
+          "code": "Phase 2"
+        },
+        {
+          "label": "予約・実行管理",
+          "code": "Phase 3"
+        },
+        {
+          "label": "Blocklyと実機を接続",
+          "code": "Phase 4 / 5"
+        }
+      ]
+    },
+    {
+      "id": "server-config",
+      "title": "サーバーの個体設定",
+      "kind": "config",
+      "summary": "許可する機体・表示名・トークンを決める。",
+      "body": "load_config()がWORKSHOP_CONFIGの指定先、未指定ならconfig/local.jsonを読む。Pydanticが個体ID、トークンの長さ・ASCII・空白、IDと資格情報の重複を検証する。実ファイルはgit対象外。マップには雛形だけを収録する。",
+      "inputs": [
+        "WORKSHOP_CONFIG または config/local.json"
+      ],
+      "outputs": [
+        "WorkshopConfig / RobotConfig"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/config.py",
+          "find": "def load_config()"
+        },
+        {
+          "path": "apps/server/app/config.py",
+          "find": "class WorkshopConfig"
+        },
+        {
+          "path": "config/local.example.json",
+          "find": "\"stationToken\""
+        }
+      ],
+      "facts": [
+        [
+          "stationToken",
+          "一覧取得用。個体トークンとは異なる値"
+        ],
+        [
+          "robots[].id",
+          "ESP32のROBOT_IDと一致させる"
+        ],
+        [
+          "robots[].token",
+          "ESP32のROBOT_TOKENと一致させる"
+        ],
+        [
+          "反映",
+          "ファイル変更後にサーバーを再起動"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "設定ファイルを選ぶ",
+          "code": "WORKSHOP_CONFIG"
+        },
+        {
+          "label": "JSONを読み、値を検証",
+          "code": "WorkshopConfig"
+        },
+        {
+          "label": "許可する個体を同期",
+          "code": "Store.initialize()"
+        }
+      ]
+    },
+    {
+      "id": "firmware-config",
+      "title": "ESP32の個体設定",
+      "kind": "config",
+      "summary": "Wi-Fi・接続先・個体認証を決める。",
+      "body": "robot_config.hがあれば読み、なければrobot_config.example.hを使う。ヘッダーの値はビルド時に取り込むため、変更後は再ビルドと再書き込みが必要。雛形のROBOT_CONFIGURED=falseではWi-Fiを開始しない。",
+      "inputs": [
+        "firmware/include/robot_config.h",
+        "設定がなければrobot_config.example.h"
+      ],
+      "outputs": [
+        "ファームウェアへ組み込む定数"
+      ],
+      "sources": [
+        {
+          "path": "firmware/src/main.cpp",
+          "find": "#if __has_include"
+        },
+        {
+          "path": "firmware/include/robot_config.example.h",
+          "find": "#define ROBOT_CONFIGURED"
+        }
+      ],
+      "facts": [
+        [
+          "ROBOT_CONFIGURED",
+          "trueで通信を有効化"
+        ],
+        [
+          "ROBOT_ID / ROBOT_TOKEN",
+          "サーバーの個体ID・tokenと一致"
+        ],
+        [
+          "WIFI_SSID / WIFI_PASSWORD",
+          "L12の2.4GHz Wi-Fi"
+        ],
+        [
+          "SERVER_URL",
+          "http://<MacBookのLAN IP>:8000。末尾/なし"
+        ],
+        [
+          "反映",
+          "編集 → pio run → upload"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "個体の設定を編集",
+          "code": "robot_config.h"
+        },
+        {
+          "label": "ビルドに取り込む",
+          "code": "pio run"
+        },
+        {
+          "label": "ESP32へ書き込む",
+          "code": "--target upload"
+        },
+        {
+          "label": "設定した接続先へ通信",
+          "code": "SERVER_URL"
+        }
+      ],
+      "conditions": [
+        {
+          "when": "設定を書き換えただけ",
+          "result": "機体には未反映",
+          "tone": "warn"
+        },
+        {
+          "when": "ビルドして再書き込み",
+          "result": "新設定で起動",
+          "tone": "ok"
+        }
+      ]
+    },
+    {
+      "id": "build",
+      "title": "PlatformIOビルド",
+      "kind": "config",
+      "summary": "ボード・Arduino・ライブラリを選ぶ。",
+      "body": "platformio.iniのesp32dev環境で共通ファームウェアをビルドする。個体別の設定は秘密ヘッダーに分け、ソースは全機体で共通。USBシリアルポートは書き込みとログ確認に使い、通常通信には使わない。",
+      "inputs": [
+        "firmware/platformio.ini",
+        "src/*.cpp / include/*.h"
+      ],
+      "outputs": [
+        ".pio/build/esp32dev/firmware.bin"
+      ],
+      "sources": [
+        {
+          "path": "firmware/platformio.ini",
+          "find": "[env:esp32dev]"
+        }
+      ],
+      "facts": [
+        [
+          "platform",
+          "espressif32@6.12.0"
+        ],
+        [
+          "board / framework",
+          "esp32dev / arduino"
+        ],
+        [
+          "lib_deps",
+          "ArduinoJson@7.4.2"
+        ],
+        [
+          "monitor_speed",
+          "115200 baud"
+        ],
+        [
+          "書き込みポート",
+          "pio device listで確認して指定"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "ボードと依存を選ぶ",
+          "code": "platformio.ini"
+        },
+        {
+          "label": "ソースと設定をコンパイル",
+          "code": "src/*.cpp / include/*.h"
+        },
+        {
+          "label": "書き込み用イメージを生成",
+          "code": "firmware.bin"
+        }
+      ]
+    },
+    {
+      "id": "server-start",
+      "title": "サーバー起動",
+      "kind": "server",
+      "summary": "設定・DBを初期化してHTTPを受ける。",
+      "body": "uvicornがapp.main:appを読み込む。create_app()でStoreを作り、lifespanで設定とDBを初期化する。設定変更の反映やサーバー再起動では既存セッションを無効化する。",
+      "inputs": [
+        "uv run --locked uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      ],
+      "outputs": [
+        "認証済みAPIを受けるサーバー"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/main.py",
+          "find": "@asynccontextmanager"
+        },
+        {
+          "path": "apps/server/pyproject.toml",
+          "find": "[project]"
+        }
+      ],
+      "facts": [
+        [
+          "WORKSHOP_CONFIG",
+          "設定JSONのパス（既定はconfig/local.json）"
+        ],
+        [
+          "WORKSHOP_DB",
+          "DBファイルのパス（既定はdata/workshop.sqlite3）"
+        ],
+        [
+          "パスの基準",
+          "既定パスはリポジトリルート。環境変数の相対パスは起動ディレクトリ基準"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "Uvicornで読み込む",
+          "code": "app.main:app"
+        },
+        {
+          "label": "設定・DBを初期化",
+          "code": "lifespan"
+        },
+        {
+          "label": "LANからのHTTPを受ける",
+          "code": "0.0.0.0:8000"
+        }
+      ]
+    },
+    {
+      "id": "initialize",
+      "title": "DBの起動時同期",
+      "kind": "data",
+      "summary": "設定個体を反映し、接続を未確認に戻す。",
+      "body": "initialize()がrobots表を用意する。既存行をenabled=0、session_id=NULL、last_seen=NULLにし、現在の設定個体だけを追加・有効化する。削除された個体の行は残るが認証と一覧の対象から外れる。",
+      "inputs": [
+        "WorkshopConfig",
+        "既存DB"
+      ],
+      "outputs": [
+        "許可した機体の一覧",
+        "全個体の接続状態をOFFLINEへ"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/store.py",
+          "find": "def initialize("
+        }
+      ],
+      "facts": [
+        [
+          "保持",
+          "個体の行・以前のfirmware_versionなど"
+        ],
+        [
+          "無効化",
+          "旧session_id・last_seen"
+        ],
+        [
+          "変更の影響",
+          "個体名とトークンのハッシュを設定で更新"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "以前の接続を無効化",
+          "code": "session_id / last_seen = NULL"
+        },
+        {
+          "label": "設定した個体だけ有効化",
+          "code": "enabled = 1"
+        },
+        {
+          "label": "機体からの再登録を待つ",
+          "code": "OFFLINE → IDLE"
+        }
+      ]
+    },
+    {
+      "id": "setup",
+      "title": "ESP32起動",
+      "kind": "robot",
+      "summary": "まずモーター停止、その後Wi-Fiを開始する。",
+      "body": "setup()はinitializeMotors()、シリアル初期化、設定判定の順で動く。設定が有効ならWi-Fiを開始し、乱数から起動単位のbootIdを作る。Wi-Fi接続を待つ長いdelayループは設けない。",
+      "inputs": [
+        "書き込み済みファームウェア",
+        "ROBOT_CONFIGURED"
+      ],
+      "outputs": [
+        "bootId / Wi-Fi接続開始",
+        "停止したGPIO"
+      ],
+      "sources": [
+        {
+          "path": "firmware/src/main.cpp",
+          "find": "void setup()"
+        },
+        {
+          "path": "firmware/src/main.cpp",
+          "find": "String createBootId()"
+        }
+      ],
+      "flow": [
+        {
+          "label": "先にモーターを止める",
+          "code": "initializeMotors()"
+        },
+        {
+          "label": "設定の有効化を確認",
+          "code": "ROBOT_CONFIGURED"
+        },
+        {
+          "label": "Wi-Fiと起動IDを準備",
+          "code": "WiFi.begin() / bootId"
+        }
+      ],
+      "conditions": [
+        {
+          "when": "ROBOT_CONFIGURED = false",
+          "result": "停止のみ / 通信しない",
+          "tone": "neutral"
+        },
+        {
+          "when": "ROBOT_CONFIGURED = true",
+          "result": "停止を維持してWi-Fi開始",
+          "tone": "ok"
+        }
+      ]
+    },
+    {
+      "id": "auth",
+      "title": "個体・ステーション認証",
+      "kind": "server",
+      "summary": "用途の違うBearerトークンを照合する。",
+      "body": "require_robot()は個体トークンのSHA-256をDB内の有効個体と比較し、個体IDを返す。require_station()は一覧用トークンを照合する。ロボットの登録では本文のrobotIdと認証されたIDも一致させる。",
+      "inputs": [
+        "Authorization: Bearer <token>"
+      ],
+      "outputs": [
+        "認証した個体IDまたはステーション権限"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/main.py",
+          "find": "def require_robot("
+        },
+        {
+          "path": "apps/server/app/main.py",
+          "find": "def require_station("
+        },
+        {
+          "path": "apps/server/app/store.py",
+          "find": "def authenticate("
+        }
+      ],
+      "facts": [
+        [
+          "401",
+          "認証情報なし / 無効な個体トークン"
+        ],
+        [
+          "403",
+          "一覧の権限なし / robotIdの不一致"
+        ],
+        [
+          "ネットワーク",
+          "LAN内HTTP。トークンを暗号化転送する構成ではない"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "HTTPから資格情報を受ける",
+          "code": "Authorization: Bearer"
+        },
+        {
+          "label": "用途ごとに照合する",
+          "code": "require_robot() / require_station()"
+        },
+        {
+          "label": "個体ID・権限を確定",
+          "code": "robot_id / ステーション"
+        }
+      ]
+    },
+    {
+      "id": "schemas",
+      "title": "JSONメッセージ検証",
+      "kind": "server",
+      "summary": "HTTPと内部の名前・型を対応させる。",
+      "body": "MessageがcamelCaseのJSONとsnake_caseのPythonを対応させる。extra=forbidで未知フィールドを拒否する。登録・HeartbeatにはprotocolVersion=1が必要。HeartbeatはIDLE状態だけを受け付ける。",
+      "inputs": [
+        "RegisterRequest / HeartbeatRequest"
+      ],
+      "outputs": [
+        "型の付いた入力",
+        "AgentResponse / RobotView"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/schemas.py",
+          "find": "class Message("
+        },
+        {
+          "path": "apps/server/app/schemas.py",
+          "find": "class HeartbeatRequest("
+        }
+      ],
+      "facts": [
+        [
+          "bootId / sessionId",
+          "UUID"
+        ],
+        [
+          "sequence",
+          "整数 1〜2147483647。bool・小数は拒否"
+        ],
+        [
+          "入力不正",
+          "HTTP 422"
+        ],
+        [
+          "応答",
+          "motorsEnabled=false。走行許可ではない"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "HTTPの入力を受ける",
+          "code": "camelCase JSON"
+        },
+        {
+          "label": "型と許容値を検証",
+          "code": "Pydantic"
+        },
+        {
+          "label": "内部の型へ渡す",
+          "code": "snake_case / UUID"
+        }
+      ]
+    },
+    {
+      "id": "register",
+      "title": "登録",
+      "kind": "server",
+      "summary": "起動単位の接続セッションを確定する。",
+      "body": "POST /api/robot-agent/registerが個体認証とrobotIdの一致を確認し、Store.register()を呼ぶ。同じbootIdの再試行は同じsessionIdを返す。bootIdが変われば新しいsessionIdにし、sequenceを0へ戻す。",
+      "inputs": [
+        "robotId / bootId / firmwareVersion",
+        "個体トークン"
+      ],
+      "outputs": [
+        "sessionId / IDLE / pollIntervalMs=500 / motorsEnabled=false"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/main.py",
+          "find": "def register("
+        },
+        {
+          "path": "apps/server/app/store.py",
+          "find": "def register("
+        }
+      ],
+      "facts": [
+        [
+          "更新",
+          "boot_id / session_id / sequence / last_seen / firmware_version"
+        ],
+        [
+          "再登録",
+          "サーバー再起動後は同じbootIdでも新sessionId"
+        ],
+        [
+          "境界",
+          "古い登録要求の順序制御はPhase 2以降の詳細設計対象"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "個体を認証しIDを照合",
+          "code": "robotId / token"
+        },
+        {
+          "label": "起動単位の接続を確定",
+          "code": "bootId → sessionId"
+        },
+        {
+          "label": "接続時刻と版を保存",
+          "code": "last_seen / firmware_version"
+        }
+      ],
+      "conditions": [
+        {
+          "when": "同じbootIdで再試行",
+          "result": "同じsessionId",
+          "tone": "ok"
+        },
+        {
+          "when": "別bootId・サーバー再起動後",
+          "result": "新しいsessionId",
+          "tone": "neutral"
+        }
+      ]
+    },
+    {
+      "id": "heartbeat",
+      "title": "Heartbeat",
+      "kind": "server",
+      "summary": "接続セッションとsequenceを照合する。",
+      "body": "POST /api/robot-agent/heartbeatがStore.heartbeat()へ渡す。bootIdとsessionIdが一致し、新しいsequenceならlast_seenを更新する。同じsequenceは200を返すが接続時刻を延ばさない。古いsequenceは409。",
+      "inputs": [
+        "bootId / sessionId / sequence / status=IDLE"
+      ],
+      "outputs": [
+        "200応答 または409",
+        "正常通信の時刻更新"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/main.py",
+          "find": "def heartbeat("
+        },
+        {
+          "path": "apps/server/app/store.py",
+          "find": "def heartbeat("
+        }
+      ],
+      "facts": [
+        [
+          "不一致",
+          "409 REGISTER_REQUIRED"
+        ],
+        [
+          "古いsequence",
+          "409 STALE_SEQUENCE"
+        ],
+        [
+          "重複",
+          "200。last_seenは変更しない"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "接続セッションを照合",
+          "code": "bootId + sessionId"
+        },
+        {
+          "label": "送信番号を比較",
+          "code": "sequence"
+        },
+        {
+          "label": "新しい番号だけ時刻を更新",
+          "code": "last_seen = now"
+        }
+      ],
+      "conditions": [
+        {
+          "when": "新しいsequence",
+          "result": "接続時刻を更新",
+          "tone": "ok"
+        },
+        {
+          "when": "同じsequence",
+          "result": "200 / 時刻は保持",
+          "tone": "neutral"
+        },
+        {
+          "when": "古いsequence・セッション不一致",
+          "result": "409 / 再登録",
+          "tone": "warn"
+        }
+      ]
+    },
+    {
+      "id": "poll",
+      "title": "送信間隔・応答検証",
+      "kind": "robot",
+      "summary": "成功は500ms、失敗は最大10秒で再試行する。",
+      "body": "contactServer()は空のsessionIdなら登録、あればHeartbeatを送る。HTTP応答のサイズ・JSON・protocolVersion・status・motorsEnabled・sessionIdを検証する。成功した登録でsessionIdを保持しsequenceを0にする。",
+      "inputs": [
+        "サーバーのHTTP応答"
+      ],
+      "outputs": [
+        "次の送信時刻",
+        "登録済みsessionId"
+      ],
+      "sources": [
+        {
+          "path": "firmware/src/main.cpp",
+          "find": "bool contactServer()"
+        },
+        {
+          "path": "firmware/src/main.cpp",
+          "find": "const bool ok = contactServer();"
+        }
+      ],
+      "facts": [
+        [
+          "成功時",
+          "応答処理後、500ms待って次を送る"
+        ],
+        [
+          "失敗時",
+          "1秒 → 2秒 → 4秒 → 8秒 → 最大10秒"
+        ],
+        [
+          "HTTP待機",
+          "接続・読み取りは各1000ms。全体の上限保証ではない"
+        ],
+        [
+          "検証",
+          "Content-Lengthは1〜1024、version=1、IDLE、motorsEnabled=false"
+        ],
+        [
+          "pollIntervalMs",
+          "応答にあるが、現実装はkPollMs=500を固定で使う"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "HTTP応答を受ける",
+          "code": "status / Content-Length"
+        },
+        {
+          "label": "JSONの契約を検証",
+          "code": "protocolVersion / sessionId"
+        },
+        {
+          "label": "次の送信時刻を決める",
+          "code": "500ms / 最大10秒"
+        }
+      ],
+      "conditions": [
+        {
+          "when": "200かつ応答の契約が正しい",
+          "result": "500ms後に送信",
+          "tone": "ok"
+        },
+        {
+          "when": "通信失敗・応答不正",
+          "result": "最大10秒で再試行",
+          "tone": "warn"
+        }
+      ]
+    },
+    {
+      "id": "presence",
+      "title": "IDLE / OFFLINEの算出",
+      "kind": "data",
+      "summary": "最後の正常通信から3秒が境界になる。",
+      "body": "list_robots()は有効な個体を読み、last_seenが存在し、現在時刻との差が0以上3秒未満ならIDLEとする。それ以外はOFFLINE。定期監視タスクでstatusを書き換える仕組みではなく、一覧取得のたびに求める。",
+      "inputs": [
+        "now / last_seen / enabled"
+      ],
+      "outputs": [
+        "status / lastSeenAt / firmwareVersion"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/store.py",
+          "find": "OFFLINE_AFTER_SECONDS"
+        },
+        {
+          "path": "apps/server/app/store.py",
+          "find": "def list_robots("
+        }
+      ],
+      "facts": [
+        [
+          "0秒以上3秒未満",
+          "IDLE"
+        ],
+        [
+          "3秒以上 / last_seenなし / 時計が過去へ移動",
+          "OFFLINE"
+        ],
+        [
+          "意味",
+          "接続状態。実行中・予約・位置・物理停止の判定ではない"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "許可した個体を読み込む",
+          "code": "enabled = 1"
+        },
+        {
+          "label": "最後の正常通信からの時間",
+          "code": "now − last_seen"
+        },
+        {
+          "label": "一覧の表示状態を決める",
+          "code": "IDLE / OFFLINE"
+        }
+      ],
+      "conditions": [
+        {
+          "when": "last_seenがあり、経過が0秒以上3秒未満",
+          "result": "IDLE",
+          "tone": "ok"
+        },
+        {
+          "when": "3秒以上・通信記録なし・時計が過去へ移動",
+          "result": "OFFLINE",
+          "tone": "neutral"
+        }
+      ]
+    },
+    {
+      "id": "reconnect",
+      "title": "再接続・再登録",
+      "kind": "robot",
+      "summary": "Wi-FiとHTTPの復旧を別々に扱う。",
+      "body": "Wi-Fi切断中は10秒ごとにWiFi.reconnect()を試す。HTTPが401・403・409ならsessionIdとsequenceを破棄し、次回は登録からやり直す。通信エラーだけなら既存セッションを保って再試行する。",
+      "inputs": [
+        "Wi-Fi切断 / HTTP失敗 / セッション不一致"
+      ],
+      "outputs": [
+        "Wi-Fi再接続 / 登録の再試行"
+      ],
+      "sources": [
+        {
+          "path": "firmware/src/main.cpp",
+          "find": "code == 409 || code == 401 || code == 403"
+        },
+        {
+          "path": "firmware/src/main.cpp",
+          "find": "if (!wifiConnected)"
+        }
+      ],
+      "facts": [
+        [
+          "シリアルログ",
+          "Wi-Fi接続・IP、HTTPステータス、通信エラー、JSON不正"
+        ],
+        [
+          "通信復旧後",
+          "モーターの停止を維持。走行を再開しない"
+        ],
+        [
+          "機体再起動",
+          "新しいbootIdで登録し直す"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "Wi-Fi切断を検出",
+          "code": "WiFi.status()"
+        },
+        {
+          "label": "再接続・HTTPを再試行",
+          "code": "WiFi.reconnect()"
+        },
+        {
+          "label": "401・403・409なら再登録",
+          "code": "sessionIdを破棄 → register"
+        }
+      ]
+    },
+    {
+      "id": "tests",
+      "title": "接続管理の自動試験",
+      "kind": "test",
+      "summary": "認証・切断・再起動を検証する。",
+      "body": "TestClientとテスト用SQLiteを使い、時刻を注入して期限を検証する。実機のWi-FiやGPIOはこの試験では計測しない。実機確認の完了報告と測定値の有無は接続試験記録に分けて残す。",
+      "inputs": [
+        "pytest / tmp_path / 注入したclock"
+      ],
+      "outputs": [
+        "17件のAPI試験"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/tests/test_connectivity.py",
+          "find": "def test_registration_and_timeout"
+        },
+        {
+          "path": "docs/phase-1-verification.md",
+          "find": "## 記録"
+        }
+      ],
+      "facts": [
+        [
+          "自動試験",
+          "認証、重複、順序、切断、再起動、設定変更、同時更新"
+        ],
+        [
+          "実機確認",
+          "Phase 1は利用者が確認済みと報告"
+        ],
+        [
+          "検証対象外",
+          "インターネット接続なしのLAN試験（項目11）"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "隔離したDBと時刻を用意",
+          "code": "tmp_path / clock"
+        },
+        {
+          "label": "APIを呼び、結果を照合",
+          "code": "TestClient / pytest"
+        },
+        {
+          "label": "通信・認証・復旧を確認",
+          "code": "17件の自動試験"
+        }
+      ]
+    },
+    {
+      "id": "dependencies",
+      "title": "Python依存関係",
+      "kind": "config",
+      "summary": "uv.lockに合わせてサーバー環境を再現する。",
+      "body": "pyproject.tomlが依存範囲と開発依存を定義し、uv.lockが解決済みバージョンを記録する。uv sync --lockedで.venvを作る。PlatformIOは現状、サーバーの開発依存に含めている。",
+      "inputs": [
+        "apps/server/pyproject.toml / uv.lock"
+      ],
+      "outputs": [
+        "apps/server/.venv"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/pyproject.toml",
+          "find": "[dependency-groups]"
+        },
+        {
+          "path": "apps/server/uv.lock",
+          "find": "version = 1"
+        }
+      ],
+      "facts": [
+        [
+          "Python",
+          "3.11以上"
+        ],
+        [
+          "実行依存",
+          "FastAPI / Uvicorn"
+        ],
+        [
+          "開発依存",
+          "pytest / httpx / Ruff / PlatformIO"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "依存の範囲を定義",
+          "code": "pyproject.toml"
+        },
+        {
+          "label": "解決した版を固定",
+          "code": "uv.lock"
+        },
+        {
+          "label": "環境を再現する",
+          "code": "uv sync --locked"
+        }
+      ]
+    },
+    {
+      "id": "gitignore",
+      "title": "秘密設定と生成物",
+      "kind": "config",
+      "summary": "ソースと端末固有データを分ける。",
+      "body": ".gitignoreが秘密設定、DB、.venv、.pioを追跡対象から除く。共有するのは個体設定の雛形と依存定義。除外は暗号化ではなく、ファームウェアのバイナリには設定値が組み込まれる。",
+      "inputs": [
+        ".gitignore"
+      ],
+      "outputs": [
+        "設定雛形を共有し、個別の値はローカルで管理"
+      ],
+      "sources": [
+        {
+          "path": ".gitignore",
+          "find": "config/local.json"
+        }
+      ],
+      "facts": [
+        [
+          "秘密設定",
+          "config/local.json / firmware/include/robot_config.h"
+        ],
+        [
+          "実行時データ",
+          "data/"
+        ],
+        [
+          "生成物",
+          ".venv/ / firmware/.pio/"
+        ],
+        [
+          "マップ",
+          "秘密設定・DB・バイナリの実データは読まない"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "公開する設定の雛形",
+          "code": "*.example.*"
+        },
+        {
+          "label": "実設定と生成物を除外",
+          "code": ".gitignore"
+        },
+        {
+          "label": "ソース・雛形を共有",
+          "code": "Git"
+        }
+      ]
+    }
+  ],
+  "views": [
+    {
+      "id": "overview",
+      "title": "全体構成",
+      "description": "端末・MacBook・ESP32の役割と、実装済みの通信経路。",
+      "positions": [
+        {
+          "id": "station",
+          "x": 32,
+          "y": 122
+        },
+        {
+          "id": "api",
+          "x": 384,
+          "y": 122
+        },
+        {
+          "id": "agent",
+          "x": 736,
+          "y": 122
+        },
+        {
+          "id": "store",
+          "x": 384,
+          "y": 316
+        },
+        {
+          "id": "database",
+          "x": 384,
+          "y": 510
+        },
+        {
+          "id": "motors",
+          "x": 736,
+          "y": 316
+        },
+        {
+          "id": "future",
+          "x": 32,
+          "y": 510
+        }
+      ],
+      "edges": [
+        {
+          "source": "station",
+          "target": "api",
+          "label": "GET /api/robots",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "agent",
+          "target": "api",
+          "label": "POST 登録・Heartbeat",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "api",
+          "target": "store",
+          "label": "Python関数呼び出し",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "store",
+          "target": "database",
+          "label": "SQL / 読み書き",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "agent",
+          "target": "motors",
+          "label": "停止出力",
+          "kind": "control",
+          "description": ""
+        }
+      ],
+      "steps": [
+        {
+          "node": "station",
+          "title": "接続状況を見る",
+          "text": "ブラウザで /docs を開き、ステーション用トークンで一覧を取得する。"
+        },
+        {
+          "node": "agent",
+          "title": "ESP32から報告する",
+          "text": "ESP32がHTTP通信を開始する。サーバーからESP32への直接接続はない。"
+        },
+        {
+          "node": "store",
+          "title": "個体情報を保持する",
+          "text": "認証・登録・HeartbeatをStoreが保存し、一覧要求時に状態を計算する。"
+        },
+        {
+          "node": "future",
+          "title": "次のフェーズ",
+          "text": "Blockly・予約・走行は未実装。今回の線はPhase 1の実経路だけ。"
+        }
+      ],
+      "groups": [
+        {
+          "title": "端末",
+          "x": 12,
+          "y": 66,
+          "w": 276,
+          "h": 610
+        },
+        {
+          "title": "運営用MacBook",
+          "x": 364,
+          "y": 66,
+          "w": 276,
+          "h": 610
+        },
+        {
+          "title": "ESP32・ロボット",
+          "x": 716,
+          "y": 66,
+          "w": 276,
+          "h": 610
+        }
+      ]
+    },
+    {
+      "id": "startup",
+      "title": "起動と設定",
+      "description": "サーバーと機体で、設定の反映タイミングが異なる。",
+      "positions": [
+        {
+          "id": "server-config",
+          "x": 32,
+          "y": 116
+        },
+        {
+          "id": "server-start",
+          "x": 384,
+          "y": 116
+        },
+        {
+          "id": "initialize",
+          "x": 736,
+          "y": 116
+        },
+        {
+          "id": "dependencies",
+          "x": 32,
+          "y": 324
+        },
+        {
+          "id": "firmware-config",
+          "x": 32,
+          "y": 532
+        },
+        {
+          "id": "build",
+          "x": 384,
+          "y": 532
+        },
+        {
+          "id": "setup",
+          "x": 736,
+          "y": 532
+        }
+      ],
+      "edges": [
+        {
+          "source": "server-config",
+          "target": "server-start",
+          "label": "起動時に読む",
+          "kind": "config",
+          "description": ""
+        },
+        {
+          "source": "server-start",
+          "target": "initialize",
+          "label": "lifespan",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "dependencies",
+          "target": "server-start",
+          "label": "uv sync / uv run",
+          "kind": "config",
+          "description": ""
+        },
+        {
+          "source": "firmware-config",
+          "target": "build",
+          "label": "ビルド時に取り込む",
+          "kind": "config",
+          "description": ""
+        },
+        {
+          "source": "build",
+          "target": "setup",
+          "label": "USBで書き込む",
+          "kind": "control",
+          "description": ""
+        }
+      ],
+      "steps": [
+        {
+          "node": "server-config",
+          "title": "許可する個体を設定",
+          "text": "JSONを変更したらサーバーを再起動する。"
+        },
+        {
+          "node": "initialize",
+          "title": "DBを設定に同期",
+          "text": "設定した個体を有効化し、以前のセッションと接続時刻を無効にする。"
+        },
+        {
+          "node": "firmware-config",
+          "title": "機体の接続先を設定",
+          "text": "ROBOT_ID・TOKENはサーバーと一致させ、SERVER_URLはMacBookのLANアドレスにする。"
+        },
+        {
+          "node": "build",
+          "title": "機体へ反映",
+          "text": "ヘッダー編集後はビルドしてESP32へ再書き込みする。"
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "communication",
+      "title": "登録とHeartbeat",
+      "description": "認証から入力検証、セッション更新、応答までをたどる。",
+      "positions": [
+        {
+          "id": "agent",
+          "x": 32,
+          "y": 116
+        },
+        {
+          "id": "auth",
+          "x": 384,
+          "y": 116
+        },
+        {
+          "id": "schemas",
+          "x": 736,
+          "y": 116
+        },
+        {
+          "id": "poll",
+          "x": 32,
+          "y": 324
+        },
+        {
+          "id": "register",
+          "x": 384,
+          "y": 324
+        },
+        {
+          "id": "heartbeat",
+          "x": 736,
+          "y": 324
+        },
+        {
+          "id": "motors",
+          "x": 32,
+          "y": 532
+        },
+        {
+          "id": "database",
+          "x": 560,
+          "y": 532
+        }
+      ],
+      "edges": [
+        {
+          "source": "agent",
+          "target": "auth",
+          "label": "Bearerで個体を識別",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "auth",
+          "target": "schemas",
+          "label": "認証・入力検証",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "schemas",
+          "target": "register",
+          "label": "登録リクエスト",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "schemas",
+          "target": "heartbeat",
+          "label": "Heartbeat",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "register",
+          "target": "database",
+          "label": "起動情報と時刻を保存",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "heartbeat",
+          "target": "database",
+          "label": "新sequenceで時刻更新",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "agent",
+          "target": "poll",
+          "label": "HTTP応答を検証",
+          "kind": "control",
+          "description": ""
+        },
+        {
+          "source": "poll",
+          "target": "motors",
+          "label": "停止を維持",
+          "kind": "control",
+          "description": ""
+        }
+      ],
+      "steps": [
+        {
+          "node": "auth",
+          "title": "個体を特定",
+          "text": "トークンに対応する個体を照合する。登録本文のrobotIdも確認する。"
+        },
+        {
+          "node": "schemas",
+          "title": "メッセージを検証",
+          "text": "protocolVersion・UUID・sequence・IDLE状態などを検証する。"
+        },
+        {
+          "node": "register",
+          "title": "セッションを作る",
+          "text": "起動単位のbootIdに対してsessionIdを返す。再試行では同じsessionIdを使う。"
+        },
+        {
+          "node": "heartbeat",
+          "title": "接続時刻を更新",
+          "text": "新しいsequenceだけlast_seenを更新する。重複は接続期限を延ばさない。"
+        },
+        {
+          "node": "poll",
+          "title": "応答後に次を送る",
+          "text": "成功なら500ms後。失敗なら間隔を延ばし、401・403・409なら登録へ戻る。"
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "recovery",
+      "title": "接続状態と復旧",
+      "description": "OFFLINEの表示と、機体側の再接続・停止は別の処理。",
+      "positions": [
+        {
+          "id": "station",
+          "x": 32,
+          "y": 116
+        },
+        {
+          "id": "presence",
+          "x": 384,
+          "y": 116
+        },
+        {
+          "id": "database",
+          "x": 736,
+          "y": 116
+        },
+        {
+          "id": "reconnect",
+          "x": 32,
+          "y": 324
+        },
+        {
+          "id": "register",
+          "x": 384,
+          "y": 324
+        },
+        {
+          "id": "motors",
+          "x": 32,
+          "y": 532
+        },
+        {
+          "id": "initialize",
+          "x": 736,
+          "y": 532
+        },
+        {
+          "id": "tests",
+          "x": 384,
+          "y": 532
+        }
+      ],
+      "edges": [
+        {
+          "source": "station",
+          "target": "presence",
+          "label": "一覧要求時に算出",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "database",
+          "target": "presence",
+          "label": "last_seenを読む",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "reconnect",
+          "target": "register",
+          "label": "409で再登録",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "register",
+          "target": "database",
+          "label": "新セッションを保存",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "initialize",
+          "target": "database",
+          "label": "旧接続を無効化",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "reconnect",
+          "target": "motors",
+          "label": "復旧しても停止",
+          "kind": "control",
+          "description": ""
+        }
+      ],
+      "steps": [
+        {
+          "node": "presence",
+          "title": "切断を表示",
+          "text": "正常通信から3秒以上たった機体は一覧上でOFFLINE。statusの定期書き換えはない。"
+        },
+        {
+          "node": "initialize",
+          "title": "サーバーが再起動したら",
+          "text": "旧セッションを無効化し、全個体をOFFLINEへ戻す。"
+        },
+        {
+          "node": "reconnect",
+          "title": "機体が復旧するまで",
+          "text": "Wi-Fi再接続とHTTP再試行を行い、409なら登録し直す。"
+        },
+        {
+          "node": "motors",
+          "title": "停止を保つ",
+          "text": "Phase 1は走行命令を持たず、復旧してもLOW出力を維持する。"
+        },
+        {
+          "node": "tests",
+          "title": "検証範囲を読む",
+          "text": "17件の自動試験と利用者による実機確認を記録。項目11は対象外。"
+        }
+      ],
+      "groups": []
+    }
+  ]
+}
