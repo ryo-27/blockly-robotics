@@ -1,0 +1,10 @@
+{
+  "stationToken": "replace-with-a-unique-random-station-token",
+  "robots": [
+    {
+      "id": "robot-01",
+      "displayName": "ロボットA",
+      "token": "replace-with-a-unique-random-robot-01-token"
+    }
+  ]
+}

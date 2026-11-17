@@ -1,0 +1,12 @@
+.DS_Store
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+data/
+config/local.json
+firmware/include/robot_config.h
+firmware/.pio/
+node_modules/
+dist/
