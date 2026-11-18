@@ -6,14 +6,15 @@
 設計の原本は [システム設計仕様書](docs/system-design.md)、今回の実装方針は
 [アーキテクチャ](docs/architecture.md)、通信契約は [プロトコル](docs/protocol.md) にあります。
 
-Phase 1の通信基盤は実装・実機確認済みです。個体別認証、登録、Heartbeat、
-SQLiteによる接続情報の保存、通信断検出・再登録に対応します。
-モーターの走行命令、予約・実行管理、Blockly画面は後続フェーズです。
-確認結果と今回の検証対象外の項目は [Phase 1 接続試験](docs/phase-1-verification.md) に記録しています。
+Phase 1の通信基盤は実機確認済みです。Phase 2ではMOVE・TURN・WAITの順次実行、
+個体別キャリブレーション、STOP、通信異常時の停止、再実行防止と運営者向け試験APIを追加しました。
+Phase 2は2026年11月19日に利用者が実機確認を完了しました。予約・プログラム保存・Blocklyは後続フェーズです。
+
+[Phase 1の記録](docs/phase-1-verification.md) と [Phase 2の試験手順](docs/phase-2-verification.md) を参照してください。
 
 ## システムマップ
 
-[閲覧ページ](docs/system-map/index.html) で、全体構成、起動と設定、登録とHeartbeat、
+[閲覧ページ](docs/system-map/index.html) で、全体構成、起動と設定、登録と制御通信、実行と停止、
 接続状態と復旧、ファイル索引を確認できます。要素を選ぶと、設定の意味と該当コードを表示します。
 [読み方と更新方法](docs/system-map/README.md) も参照してください。
 
@@ -82,9 +83,18 @@ apps/server/.venv/bin/pio device monitor --project-dir firmware --port /dev/cu.Y
 ```
 
 `robot_config.h` がない場合もテンプレートでビルドできますが、Wi-Fi通信は開始しません。
-今回のファームウェアは全状態でGPIO25/26/27/14をLOWに保ちます。
-HTTPは停止中にのみ実行する実装です。走行制御の追加前に、ネットワーク処理を
-独立させて停止監視を妨げない構造に変更します。
+走行には、サーバー設定の `motionEnabled: true` とESP32設定の
+`#define ROBOT_MOTION_ENABLED true` の両方が必要です。未定義・falseでは走行しません。
+個体別の反転と時間はサーバーの `calibration` で設定し、実行受付時に固定します。
+設定雛形は暫定値です。実機の方向と1マス・90度の時間を確認して調整します。
+
+運営者のSwagger操作から `POST /api/robots/{robot_id}/test-executions` へ命令を送り、
+`GET /api/test-executions/{execution_id}` で状態を確認し、
+`POST /api/test-executions/{execution_id}/stop` で停止を要求できます。
+具体的な送信例と安全確認は [Phase 2の試験手順](docs/phase-2-verification.md) にあります。
+
+HTTP通信とモーターの実行・停止監視は別タスクです。許可が1.5秒で失効すると停止します。
+停止遅延の実測値はまだないため、実機で試験するまでは設計上の期限として扱います。
 
 ## 検証
 
@@ -95,4 +105,12 @@ uv run --locked ruff check .
 uv run --locked ruff format --check .
 ```
 
-実機の手順は [Phase 1 接続試験](docs/phase-1-verification.md) を参照してください。
+リポジトリルートでファームウェアのホスト試験とマップの同期を確認できます。
+
+```sh
+bash scripts/test_firmware.sh
+python3 scripts/build_system_map.py --check
+```
+
+ホスト試験にはC++17対応の `c++` と、PlatformIOビルドで取得したArduinoJsonが必要です。
+実機の手順は [Phase 2 実行試験](docs/phase-2-verification.md) を参照してください。

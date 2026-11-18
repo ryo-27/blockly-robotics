@@ -371,7 +371,7 @@
     $("#viewport").hidden=files;$("#file-index").hidden=!files;$("#legend").hidden=files;$("#map-tools").hidden=files;$("#walkthrough").hidden=files;
     $("#view-title").textContent=files?"ファイル索引":activeView.title;
     $("#view-description").textContent=files?"ファイル名から、その責務・設定項目・実際の動作を引く。":activeView.description;
-    $("#view-number").textContent="SYSTEM / "+String(files?5:data.views.indexOf(activeView)+1).padStart(2,"0");
+    $("#view-number").textContent="SYSTEM / "+String(files?data.views.length+1:data.views.indexOf(activeView)+1).padStart(2,"0");
     document.title=(files?"ファイル索引":activeView.title)+" · Blockly Robotics";
     $("#views").querySelectorAll("a").forEach((a)=>{
       if(a.dataset.view===state.view)a.setAttribute("aria-current","page");else a.removeAttribute("aria-current");
@@ -399,6 +399,7 @@
       event.preventDefault();const saved=viewMemory.get(view.id);navigate(view.id,saved?{node:saved.node}:{});
     });$("#views").append(link);
   });
+  $(".phase").textContent=data.phase;
   drawFileIndex();
   $("#source-version").textContent="SOURCE "+data.sourceDigest;
   $("#zoom-in").addEventListener("click",()=>setZoom(zoom+.1));

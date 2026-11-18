@@ -1,28 +1,29 @@
 {
   "title": "Blockly Robotics システムマップ",
-  "phase": "Phase 1 · 実機確認済み",
+  "phase": "Phase 2 · 実機確認済み",
   "nodes": [
     {
       "id": "station",
       "title": "ブラウザ・タブレット",
       "kind": "client",
-      "summary": "Swagger UIで接続状態を確認する。",
-      "body": "Phase 1の操作入口はFastAPIの /docs。Authorizeにステーション用トークンを入力し、GET /api/robotsを実行する。子ども向けのBlockly画面はまだ存在しない。",
+      "summary": "Swaggerで一覧・試験実行・STOPを操作する。",
+      "body": "Phase 2の操作入口はFastAPIの /docs。stationTokenで一覧と運営者用の試験APIを使う。子ども向けBlockly・予約・参加者の認証はまだない。",
       "inputs": [
         "MacBookのLANアドレス:8000/docs",
         "stationToken（Bearerの値）"
       ],
       "outputs": [
-        "ロボット一覧と接続状態"
+        "個体一覧",
+        "試験実行の受付・状態確認・STOP"
       ],
       "sources": [
         {
           "path": "apps/server/app/main.py",
-          "find": "@api.get(\"/api/robots\""
+          "find": "def create_test_execution("
         },
         {
-          "path": "README.md",
-          "find": "右上のAuthorize"
+          "path": "docs/phase-2-verification.md",
+          "find": "## 命令送信"
         }
       ],
       "facts": [
@@ -41,16 +42,16 @@
       ],
       "flow": [
         {
-          "label": "API操作画面を開く",
+          "label": "API操作画面へ",
           "code": "/docs"
         },
         {
-          "label": "一覧用の認証",
+          "label": "ステーション認証",
           "code": "stationToken"
         },
         {
-          "label": "接続状態を取得",
-          "code": "GET /api/robots"
+          "label": "一覧・試験・停止",
+          "code": "test-executions / stop"
         }
       ]
     },
@@ -59,7 +60,7 @@
       "title": "FastAPI",
       "kind": "server",
       "summary": "認証・JSON検証・処理の入口をまとめる。",
-      "body": "create_app()がAPIとStoreを組み立てる。起動時のlifespanで設定を読み、SQLiteを初期化する。GET /api/robotsはステーション認証、登録・Heartbeatは個体認証を通る。",
+      "body": "create_app()がExecutionStoreを組み立て、lifespanで設定とDBを初期化する。旧版の登録・Heartbeatを保ち、protocolVersion=2の制御通信と運営者の試験APIを追加している。",
       "inputs": [
         "HTTPリクエスト",
         "WorkshopConfig / Store"
@@ -76,106 +77,115 @@
       "facts": [
         [
           "稼働場所",
-          "運営用MacBook"
+          "MacBook / 単一プロセス"
         ],
         [
           "待ち受け",
           "uvicorn --host 0.0.0.0 --port 8000"
         ],
         [
-          "プロセス",
-          "単一プロセス。複数worker非対応"
+          "起動情報",
+          "GET /api/health → phase=2"
         ]
       ],
       "flow": [
         {
-          "label": "アプリを組み立てる",
-          "code": "create_app()"
+          "label": "アプリと保存処理を用意",
+          "code": "create_app() / ExecutionStore"
         },
         {
-          "label": "起動時の準備",
-          "code": "lifespan → config / Store"
+          "label": "設定・DBを初期化",
+          "code": "lifespan"
         },
         {
-          "label": "認証・型検証",
-          "code": "Depends / Pydantic"
-        },
-        {
-          "label": "保存処理へ渡す",
-          "code": "Store"
+          "label": "認証して処理へ渡す",
+          "code": "register / control / test-executions"
         }
       ]
     },
     {
       "id": "agent",
-      "title": "ESP32通信ループ",
+      "title": "ESP32通信タスク",
       "kind": "robot",
-      "summary": "Wi-Fi経由で登録とHeartbeatを送る。",
-      "body": "setup()がWi-Fiを開始し、loop()が登録またはHeartbeatを送る。サーバーから機体へ直接接続する構成ではない。送信間隔は成功時500ms、失敗時は最大10秒へ伸ばす。",
+      "summary": "HTTPをcore 0で処理し、実行タスクへ渡す。",
+      "body": "networkTask()が起動登録と250msを基準とした制御通信を行う。HTTPの待機は別coreのモーター実行を妨げない。状態はスナップショットで読み、検証した応答はキューへ送る。 状態報告はbuildControlRequest()で組み立て、変数の寿命に依存しない文字列コピーを行う。",
       "inputs": [
-        "robot_config.hの個体・Wi-Fi・接続先設定",
-        "HTTP応答"
+        "個体設定とWi-Fi",
+        "実行タスクの状態スナップショット",
+        "HTTP制御応答"
       ],
       "outputs": [
-        "POST register / heartbeat",
-        "シリアル診断ログ"
+        "POST register / control",
+        "START・CONTINUE・STOP・ACKのキューフレーム"
       ],
       "sources": [
         {
-          "path": "firmware/src/main.cpp",
-          "find": "bool contactServer()"
+          "path": "firmware/src/robot_runtime.cpp",
+          "find": "void networkTask("
         },
         {
-          "path": "firmware/src/main.cpp",
-          "find": "void loop()"
+          "path": "firmware/src/robot_runtime.cpp",
+          "find": "bool readFrame("
+        },
+        {
+          "path": "firmware/src/control_message.cpp",
+          "find": "void buildControlRequest("
         }
       ],
       "facts": [
         [
-          "ファームウェア",
-          "0.1.0-phase1"
+          "版",
+          "0.2.1-phase2"
         ],
         [
-          "命令取得",
-          "未実装。現在は接続状態の報告のみ"
+          "配置",
+          "core 0 / priority 1"
         ],
         [
-          "通信中",
-          "モーターは停止を維持"
+          "通信間隔",
+          "成功250ms。失敗は最大10秒"
+        ],
+        [
+          "HTTPタイムアウト",
+          "接続・読み取り各750ms。停止監視とは別"
+        ],
+        [
+          "報告の文字列",
+          "スナップショット内のIDをJsonStringでコピーし、送信まで保持する"
         ]
       ],
       "flow": [
         {
-          "label": "接続セッションなし",
-          "code": "POST /register"
+          "label": "個体を登録",
+          "code": "protocolVersion=1 / register"
         },
         {
-          "label": "登録応答を保持",
-          "code": "sessionId"
+          "label": "状態を報告",
+          "code": "protocolVersion=2 / control"
         },
         {
-          "label": "接続中の報告",
-          "code": "POST /heartbeat"
+          "label": "応答を検証",
+          "code": "sessionId / sequence / action"
         },
         {
-          "label": "次の送信まで待つ",
-          "code": "500ms / 再試行"
+          "label": "キューへ渡す",
+          "code": "motorTask"
         }
       ]
     },
     {
       "id": "store",
-      "title": "Store",
+      "title": "Store / ExecutionStore",
       "kind": "data",
-      "summary": "SQLiteへの更新と状態の算出を担当する。",
-      "body": "APIは保存の詳細をStoreへ委ねる。各操作で接続を開きBEGIN IMMEDIATEを開始し、終了時にcommitまたはrollbackして接続を閉じる。認証・セッション・sequenceもここで照合する。",
+      "summary": "個体・試験実行・許可をSQLiteで管理する。",
+      "body": "Storeが個体・接続の保存と状態算出を担当し、ExecutionStoreが試験受付・排他・STOP・配信と許可更新を扱う。BEGIN IMMEDIATEで照合と更新を同じトランザクションにする。",
       "inputs": [
-        "個体ID・bootId・sessionId・sequence",
-        "サーバー時刻"
+        "設定と個体の報告",
+        "試験命令・requestId・停止要求"
       ],
       "outputs": [
-        "個体情報の保存",
-        "IDLE / OFFLINEの一覧"
+        "robots / test_executions",
+        "制御応答・試験状態"
       ],
       "sources": [
         {
@@ -183,22 +193,18 @@
           "find": "class Store:"
         },
         {
-          "path": "apps/server/app/store.py",
-          "find": "def connection("
+          "path": "apps/server/app/executions.py",
+          "find": "class ExecutionStore("
         }
       ],
       "flow": [
         {
-          "label": "SQLite接続を開く",
-          "code": "connection()"
-        },
-        {
-          "label": "更新を直列化",
+          "label": "照合と更新を開始",
           "code": "BEGIN IMMEDIATE"
         },
         {
-          "label": "照合・読み書き",
-          "code": "SQL"
+          "label": "個体と実行を管理",
+          "code": "Store / ExecutionStore"
         },
         {
           "label": "確定して接続を閉じる",
@@ -210,8 +216,8 @@
       "id": "database",
       "title": "SQLite / robots",
       "kind": "data",
-      "summary": "1個体1行で接続情報を保持する。",
-      "body": "現在作成する表はrobotsだけ。status列はなく、last_seenと現在時刻から接続状態を都度求める。登録対象は設定から読み込む。ProgramsやReservationsなどは未実装。",
+      "summary": "個体設定と接続状態を1個体1行で保持する。",
+      "body": "robotsは個体ID、認証ハッシュ、接続情報に加え、走行の有効化・キャリブレーション・制御通信の時刻を持つ。status列はなく、last_seenからIDLE/OFFLINEを算出する。試験実行の履歴は別のtest_executions表。",
       "inputs": [
         "StoreからのSQL"
       ],
@@ -222,37 +228,41 @@
         {
           "path": "apps/server/app/store.py",
           "find": "CREATE TABLE IF NOT EXISTS robots"
+        },
+        {
+          "path": "apps/server/app/store.py",
+          "find": "PRAGMA table_info(robots)"
         }
       ],
       "facts": [
         [
-          "既定のファイル",
+          "既定DB",
           "data/workshop.sqlite3"
         ],
         [
-          "個体情報",
-          "id / display_name / token_hash / enabled"
+          "Phase 1互換",
+          "既存表へ必要な列を追加。DB削除は不要"
         ],
         [
-          "接続情報",
-          "boot_id / session_id / sequence / last_seen / firmware_version"
+          "Phase 2列",
+          "agent_protocol / agent_status / last_control / motion_enabled / calibration"
         ],
         [
           "秘密情報",
-          "個体トークンはSHA-256を保存。元の値は保存しない"
+          "個体トークンはSHA-256で保存"
         ]
       ],
       "flow": [
         {
-          "label": "サーバーで許可する個体",
+          "label": "設定した個体を同期",
           "code": "robots[].id"
         },
         {
-          "label": "1個体1行で保存",
+          "label": "接続と走行設定を保持",
           "code": "robots"
         },
         {
-          "label": "一覧取得時に接続を判定",
+          "label": "一覧取得時に接続を算出",
           "code": "last_seen → IDLE / OFFLINE"
         }
       ]
@@ -261,63 +271,60 @@
       "id": "motors",
       "title": "モーター出力",
       "kind": "robot",
-      "summary": "GPIOをLOWにして停止を維持する。",
-      "body": "initializeMotors()は出力値をLOWにしてから出力モードへ設定する。loop()でもstopMotors()を呼ぶ。DRV8835のIN/INモードでLOW/LOWは空転停止。現在は前進・旋回コードを持たない。",
+      "summary": "方向反転を一元化し、左右モーターを駆動する。",
+      "body": "driveMotors()は一度LOW/LOWへ落としてから左右の方向を設定する。invertLeftとinvertRightはこの層だけで補正する。stopMotors()は空転停止。許可期限と通信失敗世代は実行タスク側で出力直前にも照合する。",
       "inputs": [
-        "initializeMotors() / stopMotors()"
+        "論理的な左右方向 -1 / 0 / 1",
+        "個体のinvertLeft / invertRight"
       ],
       "outputs": [
-        "GPIO25 / 26 / 27 / 14 = LOW"
+        "GPIO25 / 26 / 27 / 14"
       ],
       "sources": [
         {
           "path": "firmware/src/motor_control.cpp",
-          "find": "void initializeMotors()"
+          "find": "void driveMotors("
         },
         {
-          "path": "firmware/src/motor_control.cpp",
-          "find": "void stopMotors()"
-        },
-        {
-          "path": "firmware/src/main.cpp",
-          "find": "void setup()"
+          "path": "firmware/src/robot_runtime.cpp",
+          "find": "class MotorOutput"
         }
       ],
       "facts": [
         [
-          "起動時",
-          "通信処理より先に停止出力を初期化"
+          "反転補正",
+          "モーター層だけで行い、命令の意味を二重に反転しない"
         ],
         [
-          "停止の意味",
-          "位置やモーター電流を計測した結果ではない"
+          "停止出力",
+          "LOW / LOW。ブレーキや位置計測ではない"
         ],
         [
-          "Phase 2前提",
-          "HTTPを独立させ、停止監視を妨げない構造へ変更"
+          "実機",
+          "利用者がPhase 2の実機確認を完了。定量測定値は未記録"
         ]
       ],
       "flow": [
         {
-          "label": "起動直後",
-          "code": "initializeMotors()"
+          "label": "方向切替前に停止",
+          "code": "stopMotors()"
         },
         {
-          "label": "出力モードを設定",
-          "code": "GPIO 25 / 26 / 27 / 14"
+          "label": "個体の取り付け方向を補正",
+          "code": "invertLeft / invertRight"
         },
         {
-          "label": "毎ループ停止を維持",
-          "code": "stopMotors() → LOW"
+          "label": "左右の入力を設定",
+          "code": "setMotor()"
         }
       ]
     },
     {
       "id": "future",
-      "title": "Blockly・予約・実行",
+      "title": "予約・Blockly・本番運用",
       "kind": "planned",
       "summary": "後続フェーズで追加する。",
-      "body": "React / Blockly、プログラム保存、AST変換、実行命令列、予約、実行ID、走行制御は設計原本にある将来の機能。Phase 1の通信経路には接続しない。",
+      "body": "Phase 2は運営者用の試験APIと基本実行エンジンまで。参加者のProgram・Reservation・Session管理、Blockly、ASTとREPEAT展開、3台運用は後続フェーズで追加する。",
       "inputs": [
         "設計仕様書のPhase 2〜6"
       ],
@@ -333,16 +340,16 @@
       "status": "planned",
       "flow": [
         {
-          "label": "実行エンジンを追加",
-          "code": "Phase 2"
-        },
-        {
-          "label": "予約・実行管理",
+          "label": "予約と保存",
           "code": "Phase 3"
         },
         {
-          "label": "Blocklyと実機を接続",
-          "code": "Phase 4 / 5"
+          "label": "Blockly / AST / REPEAT",
+          "code": "Phase 4"
+        },
+        {
+          "label": "3台運用と教材",
+          "code": "Phase 5 / 6"
         }
       ]
     },
@@ -351,7 +358,7 @@
       "title": "サーバーの個体設定",
       "kind": "config",
       "summary": "許可する機体・表示名・トークンを決める。",
-      "body": "load_config()がWORKSHOP_CONFIGの指定先、未指定ならconfig/local.jsonを読む。Pydanticが個体ID、トークンの長さ・ASCII・空白、IDと資格情報の重複を検証する。実ファイルはgit対象外。マップには雛形だけを収録する。",
+      "body": "load_config()が設定JSONを読み、個体ID・資格情報・motionEnabled・calibrationを検証する。既存設定で走行有効化を省略した場合はfalse。設定変更後はサーバーを再起動する。受付時のキャリブレーションはその実行に固定される。",
       "inputs": [
         "WORKSHOP_CONFIG または config/local.json"
       ],
@@ -361,33 +368,33 @@
       "sources": [
         {
           "path": "apps/server/app/config.py",
-          "find": "def load_config()"
+          "find": "class RobotConfig("
         },
         {
-          "path": "apps/server/app/config.py",
-          "find": "class WorkshopConfig"
+          "path": "apps/server/app/execution_models.py",
+          "find": "class Calibration("
         },
         {
           "path": "config/local.example.json",
-          "find": "\"stationToken\""
+          "find": "\"motionEnabled\""
         }
       ],
       "facts": [
         [
           "stationToken",
-          "一覧取得用。個体トークンとは異なる値"
+          "運営者の一覧・試験・停止用"
         ],
         [
-          "robots[].id",
-          "ESP32のROBOT_IDと一致させる"
+          "robots[].motionEnabled",
+          "既定false。機体側も別に有効化が必要"
         ],
         [
-          "robots[].token",
-          "ESP32のROBOT_TOKENと一致させる"
+          "calibration",
+          "前後1マス、左右90度の時間、左右モーター反転"
         ],
         [
-          "反映",
-          "ファイル変更後にサーバーを再起動"
+          "更新",
+          "JSON編集後にサーバー再起動。旧実行は停止確認へ"
         ]
       ],
       "flow": [
@@ -410,7 +417,7 @@
       "title": "ESP32の個体設定",
       "kind": "config",
       "summary": "Wi-Fi・接続先・個体認証を決める。",
-      "body": "robot_config.hがあれば読み、なければrobot_config.example.hを使う。ヘッダーの値はビルド時に取り込むため、変更後は再ビルドと再書き込みが必要。雛形のROBOT_CONFIGURED=falseではWi-Fiを開始しない。",
+      "body": "robot_settings.hが秘密ヘッダーを選択する。ROBOT_CONFIGUREDはWi-Fi通信、ROBOT_MOTION_ENABLEDは走行を有効化する。既存ヘッダーに走行設定がなければfalse。変更を機体へ反映するには再ビルド・再書き込みが必要。",
       "inputs": [
         "firmware/include/robot_config.h",
         "設定がなければrobot_config.example.h"
@@ -420,34 +427,34 @@
       ],
       "sources": [
         {
-          "path": "firmware/src/main.cpp",
+          "path": "firmware/include/robot_settings.h",
           "find": "#if __has_include"
         },
         {
           "path": "firmware/include/robot_config.example.h",
-          "find": "#define ROBOT_CONFIGURED"
+          "find": "#define ROBOT_MOTION_ENABLED"
         }
       ],
       "facts": [
         [
           "ROBOT_CONFIGURED",
-          "trueで通信を有効化"
+          "通信設定を有効化"
+        ],
+        [
+          "ROBOT_MOTION_ENABLED",
+          "走行を有効化。未定義はfalse"
         ],
         [
           "ROBOT_ID / ROBOT_TOKEN",
-          "サーバーの個体ID・tokenと一致"
-        ],
-        [
-          "WIFI_SSID / WIFI_PASSWORD",
-          "L12の2.4GHz Wi-Fi"
+          "サーバー設定と一致"
         ],
         [
           "SERVER_URL",
-          "http://<MacBookのLAN IP>:8000。末尾/なし"
+          "MacBookのLAN IP。末尾/なし"
         ],
         [
           "反映",
-          "編集 → pio run → upload"
+          "ヘッダー編集 → ビルド → USB書き込み"
         ]
       ],
       "flow": [
@@ -486,7 +493,7 @@
       "title": "PlatformIOビルド",
       "kind": "config",
       "summary": "ボード・Arduino・ライブラリを選ぶ。",
-      "body": "platformio.iniのesp32dev環境で共通ファームウェアをビルドする。個体別の設定は秘密ヘッダーに分け、ソースは全機体で共通。USBシリアルポートは書き込みとログ確認に使い、通常通信には使わない。",
+      "body": "platformio.iniのesp32dev環境でArduino / C++17の共通ファームウェアをビルドする。個体別の秘密設定はヘッダーに分ける。通常の実行通信はWi-Fiであり、USBは書き込みとログに使う。",
       "inputs": [
         "firmware/platformio.ini",
         "src/*.cpp / include/*.h"
@@ -510,16 +517,16 @@
           "esp32dev / arduino"
         ],
         [
+          "言語",
+          "C++17。ホスト試験と同じ"
+        ],
+        [
           "lib_deps",
           "ArduinoJson@7.4.2"
         ],
         [
           "monitor_speed",
           "115200 baud"
-        ],
-        [
-          "書き込みポート",
-          "pio device listで確認して指定"
         ]
       ],
       "flow": [
@@ -542,7 +549,7 @@
       "title": "サーバー起動",
       "kind": "server",
       "summary": "設定・DBを初期化してHTTPを受ける。",
-      "body": "uvicornがapp.main:appを読み込む。create_app()でStoreを作り、lifespanで設定とDBを初期化する。設定変更の反映やサーバー再起動では既存セッションを無効化する。",
+      "body": "Uvicornがapp.main:appを読み、lifespanで設定とExecutionStoreを初期化する。既存robots表の列追加とtest_executions表・索引を用意する。起動時に旧セッションを無効化し、進行中実行をSTOP_REQUESTEDにする。",
       "inputs": [
         "uv run --locked uvicorn app.main:app --host 0.0.0.0 --port 8000"
       ],
@@ -593,7 +600,7 @@
       "title": "DBの起動時同期",
       "kind": "data",
       "summary": "設定個体を反映し、接続を未確認に戻す。",
-      "body": "initialize()がrobots表を用意する。既存行をenabled=0、session_id=NULL、last_seen=NULLにし、現在の設定個体だけを追加・有効化する。削除された個体の行は残るが認証と一覧の対象から外れる。",
+      "body": "Store.initialize()が個体設定と接続を同期し、ExecutionStore.initialize()が試験実行の表と部分一意索引を用意する。進行中実行はSTOP_REQUESTEDとして保持し、停止確認なしに新規実行へ割り当てない。",
       "inputs": [
         "WorkshopConfig",
         "既存DB"
@@ -606,34 +613,38 @@
         {
           "path": "apps/server/app/store.py",
           "find": "def initialize("
+        },
+        {
+          "path": "apps/server/app/executions.py",
+          "find": "def initialize("
         }
       ],
       "facts": [
         [
-          "保持",
-          "個体の行・以前のfirmware_versionなど"
+          "接続",
+          "session_id / last_seen / last_controlを無効化"
         ],
         [
-          "無効化",
-          "旧session_id・last_seen"
+          "履歴",
+          "test_executionsを保持"
         ],
         [
-          "変更の影響",
-          "個体名とトークンのハッシュを設定で更新"
+          "進行中",
+          "STOP_REQUESTEDへ。次の割当は停止報告後"
         ]
       ],
       "flow": [
         {
-          "label": "以前の接続を無効化",
-          "code": "session_id / last_seen = NULL"
+          "label": "旧接続を無効化",
+          "code": "Store.initialize()"
         },
         {
-          "label": "設定した個体だけ有効化",
-          "code": "enabled = 1"
+          "label": "実行表と索引を確認",
+          "code": "ExecutionStore.initialize()"
         },
         {
-          "label": "機体からの再登録を待つ",
-          "code": "OFFLINE → IDLE"
+          "label": "未完了は停止確認へ",
+          "code": "STOP_REQUESTED"
         }
       ]
     },
@@ -642,7 +653,7 @@
       "title": "ESP32起動",
       "kind": "robot",
       "summary": "まずモーター停止、その後Wi-Fiを開始する。",
-      "body": "setup()はinitializeMotors()、シリアル初期化、設定判定の順で動く。設定が有効ならWi-Fiを開始し、乱数から起動単位のbootIdを作る。Wi-Fi接続を待つ長いdelayループは設けない。",
+      "body": "setup()が最初に停止出力を初期化し、通信設定が有効ならstartRobotRuntime()を呼ぶ。キューとcore指定の2タスクを用意する。実行タスクがNVSを開き、通信タスクがWi-Fi接続・登録を進める。",
       "inputs": [
         "書き込み済みファームウェア",
         "ROBOT_CONFIGURED"
@@ -657,22 +668,22 @@
           "find": "void setup()"
         },
         {
-          "path": "firmware/src/main.cpp",
-          "find": "String createBootId()"
+          "path": "firmware/src/robot_runtime.cpp",
+          "find": "void startRobotRuntime()"
         }
       ],
       "flow": [
         {
-          "label": "先にモーターを止める",
+          "label": "停止出力を初期化",
           "code": "initializeMotors()"
         },
         {
-          "label": "設定の有効化を確認",
-          "code": "ROBOT_CONFIGURED"
+          "label": "キューと実行タスクを用意",
+          "code": "motorTask / NVS"
         },
         {
-          "label": "Wi-Fiと起動IDを準備",
-          "code": "WiFi.begin() / bootId"
+          "label": "Wi-Fiと通信タスクを開始",
+          "code": "networkTask"
         }
       ],
       "conditions": [
@@ -748,7 +759,7 @@
       "title": "JSONメッセージ検証",
       "kind": "server",
       "summary": "HTTPと内部の名前・型を対応させる。",
-      "body": "MessageがcamelCaseのJSONとsnake_caseのPythonを対応させる。extra=forbidで未知フィールドを拒否する。登録・HeartbeatにはprotocolVersion=1が必要。HeartbeatはIDLE状態だけを受け付ける。",
+      "body": "旧版のMessageはcamelCaseとsnake_caseを対応させ、未知フィールドを拒否する。execution_models.pyがPhase 2の命令型・制御通信・状態の組み合わせを検証する。bool・小数の数値や未対応命令は拒否する。",
       "inputs": [
         "RegisterRequest / HeartbeatRequest"
       ],
@@ -762,26 +773,38 @@
           "find": "class Message("
         },
         {
-          "path": "apps/server/app/schemas.py",
-          "find": "class HeartbeatRequest("
+          "path": "apps/server/app/execution_models.py",
+          "find": "class ControlRequest("
+        },
+        {
+          "path": "apps/server/app/execution_models.py",
+          "find": "class TestExecutionRequest("
+        },
+        {
+          "path": "apps/server/app/main.py",
+          "find": "async def validation_error("
         }
       ],
       "facts": [
         [
-          "bootId / sessionId",
-          "UUID"
+          "登録・旧Heartbeat",
+          "protocolVersion=1"
         ],
         [
-          "sequence",
-          "整数 1〜2147483647。bool・小数は拒否"
+          "実行制御",
+          "protocolVersion=2"
         ],
         [
-          "入力不正",
-          "HTTP 422"
+          "命令型",
+          "MOVE / TURN / WAIT"
         ],
         [
-          "応答",
-          "motorsEnabled=false。走行許可ではない"
+          "エラー",
+          "入力不正はHTTP 422"
+        ],
+        [
+          "422の診断",
+          "状態報告は拒否した項目名と検証の種類だけをログへ出す"
         ]
       ],
       "flow": [
@@ -804,7 +827,7 @@
       "title": "登録",
       "kind": "server",
       "summary": "起動単位の接続セッションを確定する。",
-      "body": "POST /api/robot-agent/registerが個体認証とrobotIdの一致を確認し、Store.register()を呼ぶ。同じbootIdの再試行は同じsessionIdを返す。bootIdが変われば新しいsessionIdにし、sequenceを0へ戻す。",
+      "body": "個体トークンとrobotIdを一致させる。同じbootIdの登録再試行は同じセッションを返す。別bootIdかサーバー再起動後はセッションを変更し、旧実行をSTOP_REQUESTEDにする。登録応答そのものは走行許可を与えない。",
       "inputs": [
         "robotId / bootId / firmwareVersion",
         "個体トークン"
@@ -818,22 +841,22 @@
           "find": "def register("
         },
         {
-          "path": "apps/server/app/store.py",
+          "path": "apps/server/app/executions.py",
           "find": "def register("
         }
       ],
       "facts": [
         [
-          "更新",
-          "boot_id / session_id / sequence / last_seen / firmware_version"
+          "応答",
+          "version=1 / sessionId / motorsEnabled=false"
         ],
         [
-          "再登録",
-          "サーバー再起動後は同じbootIdでも新sessionId"
+          "新セッション",
+          "制御通信の準備状態を解除"
         ],
         [
-          "境界",
-          "古い登録要求の順序制御はPhase 2以降の詳細設計対象"
+          "未完了実行",
+          "停止報告まで占有を保持"
         ]
       ],
       "flow": [
@@ -865,10 +888,10 @@
     },
     {
       "id": "heartbeat",
-      "title": "Heartbeat",
+      "title": "旧Heartbeatの互換",
       "kind": "server",
-      "summary": "接続セッションとsequenceを照合する。",
-      "body": "POST /api/robot-agent/heartbeatがStore.heartbeat()へ渡す。bootIdとsessionIdが一致し、新しいsequenceならlast_seenを更新する。同じsequenceは200を返すが接続時刻を延ばさない。古いsequenceは409。",
+      "summary": "Phase 1のIDLE報告だけを受け付ける。",
+      "body": "既存のversion=1 Heartbeatは接続表示の互換用に残す。Phase 2ファームウェアは代わりにcontrolを使う。旧Heartbeatだけではlast_controlを更新せず、試験実行を受付可能にしない。",
       "inputs": [
         "bootId / sessionId / sequence / status=IDLE"
       ],
@@ -888,30 +911,30 @@
       ],
       "facts": [
         [
-          "不一致",
-          "409 REGISTER_REQUIRED"
+          "対応",
+          "IDLEのみ"
         ],
         [
-          "古いsequence",
-          "409 STALE_SEQUENCE"
+          "同じsequence",
+          "200 / last_seenを延ばさない"
         ],
         [
-          "重複",
-          "200。last_seenは変更しない"
+          "新ファームウェア",
+          "controlへ置き換え"
         ]
       ],
       "flow": [
         {
-          "label": "接続セッションを照合",
-          "code": "bootId + sessionId"
+          "label": "旧版からIDLE報告",
+          "code": "protocolVersion=1"
         },
         {
-          "label": "送信番号を比較",
-          "code": "sequence"
+          "label": "接続時刻だけを更新",
+          "code": "last_seen"
         },
         {
-          "label": "新しい番号だけ時刻を更新",
-          "code": "last_seen = now"
+          "label": "走行受付の接続確認には使わない",
+          "code": "last_controlは更新しない"
         }
       ],
       "conditions": [
@@ -934,10 +957,10 @@
     },
     {
       "id": "poll",
-      "title": "送信間隔・応答検証",
+      "title": "応答検証と実行許可",
       "kind": "robot",
-      "summary": "成功は500ms、失敗は最大10秒で再試行する。",
-      "body": "contactServer()は空のsessionIdなら登録、あればHeartbeatを送る。HTTP応答のサイズ・JSON・protocolVersion・status・motorsEnabled・sessionIdを検証する。成功した登録でsessionIdを保持しsequenceを0にする。",
+      "summary": "遅延応答を含め、許可期限を検証する。",
+      "body": "readFrame()がversion、sessionId、sequence、actionとleaseMsを照合する。STARTはparseProgram()で命令を検証する。許可期限は応答の受信時刻ではなく要求の送信開始時刻から1500msとし、遅延応答で期限を伸ばさない。",
       "inputs": [
         "サーバーのHTTP応答"
       ],
@@ -947,54 +970,54 @@
       ],
       "sources": [
         {
-          "path": "firmware/src/main.cpp",
-          "find": "bool contactServer()"
+          "path": "firmware/src/robot_runtime.cpp",
+          "find": "bool readFrame("
         },
         {
-          "path": "firmware/src/main.cpp",
-          "find": "const bool ok = contactServer();"
+          "path": "firmware/src/robot_runtime.cpp",
+          "find": "bool send("
         }
       ],
       "facts": [
         [
           "成功時",
-          "応答処理後、500ms待って次を送る"
+          "250ms後に次を送る"
         ],
         [
-          "失敗時",
-          "1秒 → 2秒 → 4秒 → 8秒 → 最大10秒"
+          "許可期限",
+          "要求送信開始から1500ms"
         ],
         [
-          "HTTP待機",
-          "接続・読み取りは各1000ms。全体の上限保証ではない"
+          "HTTP",
+          "各750ms。停止監視は別タスク"
         ],
         [
-          "検証",
-          "Content-Lengthは1〜1024、version=1、IDLE、motorsEnabled=false"
-        ],
-        [
-          "pollIntervalMs",
-          "応答にあるが、現実装はkPollMs=500を固定で使う"
+          "STOP / ACK / IDLE",
+          "leaseMs=0"
         ]
       ],
       "flow": [
         {
-          "label": "HTTP応答を受ける",
-          "code": "status / Content-Length"
+          "label": "HTTP応答を検証",
+          "code": "sessionId / sequence / action"
         },
         {
-          "label": "JSONの契約を検証",
-          "code": "protocolVersion / sessionId"
+          "label": "STARTの命令を検証",
+          "code": "parseProgram()"
         },
         {
-          "label": "次の送信時刻を決める",
-          "code": "500ms / 最大10秒"
+          "label": "要求時刻から期限を設定",
+          "code": "requestStartedAt + 1500"
+        },
+        {
+          "label": "実行タスクへ渡す",
+          "code": "Frame / Queue"
         }
       ],
       "conditions": [
         {
           "when": "200かつ応答の契約が正しい",
-          "result": "500ms後に送信",
+          "result": "250ms後に送信",
           "tone": "ok"
         },
         {
@@ -1009,7 +1032,7 @@
       "title": "IDLE / OFFLINEの算出",
       "kind": "data",
       "summary": "最後の正常通信から3秒が境界になる。",
-      "body": "list_robots()は有効な個体を読み、last_seenが存在し、現在時刻との差が0以上3秒未満ならIDLEとする。それ以外はOFFLINE。定期監視タスクでstatusを書き換える仕組みではなく、一覧取得のたびに求める。",
+      "body": "接続表示はlast_seenが0秒以上3秒未満ならIDLE、それ以外はOFFLINE。実行状態は別のexecutionStatusとexecutionIdで返す。接続がIDLEでも走行中・停止待ちの可能性があり、次の受付にはlast_controlと未完了実行も照合する。",
       "inputs": [
         "now / last_seen / enabled"
       ],
@@ -1019,25 +1042,29 @@
       "sources": [
         {
           "path": "apps/server/app/store.py",
-          "find": "OFFLINE_AFTER_SECONDS"
+          "find": "def list_robots("
         },
         {
-          "path": "apps/server/app/store.py",
+          "path": "apps/server/app/executions.py",
           "find": "def list_robots("
         }
       ],
       "facts": [
         [
-          "0秒以上3秒未満",
-          "IDLE"
+          "status",
+          "接続表示のIDLE / OFFLINE"
         ],
         [
-          "3秒以上 / last_seenなし / 時計が過去へ移動",
-          "OFFLINE"
+          "executionStatus",
+          "QUEUED / DISPATCHED / RUNNING / STOP_REQUESTEDなど"
         ],
         [
-          "意味",
-          "接続状態。実行中・予約・位置・物理停止の判定ではない"
+          "受付準備",
+          "last_controlが直近3秒未満、報告IDLE、未完了実行なし"
+        ],
+        [
+          "注意",
+          "3秒OFFLINE表示は停止遅延の保証ではない"
         ]
       ],
       "flow": [
@@ -1072,7 +1099,7 @@
       "title": "再接続・再登録",
       "kind": "robot",
       "summary": "Wi-FiとHTTPの復旧を別々に扱う。",
-      "body": "Wi-Fi切断中は10秒ごとにWiFi.reconnect()を試す。HTTPが401・403・409ならsessionIdとsequenceを破棄し、次回は登録からやり直す。通信エラーだけなら既存セッションを保って再試行する。",
+      "body": "networkTask()はWi-Fi切断・HTTP失敗・不正応答で失敗世代を更新する。motorTask()が走行中ならSTOPPEDへ固定する。401・403・409では再登録するが、旧実行の再開はしない。古いキューフレームも世代で除外する。",
       "inputs": [
         "Wi-Fi切断 / HTTP失敗 / セッション不一致"
       ],
@@ -1081,49 +1108,53 @@
       ],
       "sources": [
         {
-          "path": "firmware/src/main.cpp",
-          "find": "code == 409 || code == 401 || code == 403"
+          "path": "firmware/src/robot_runtime.cpp",
+          "find": "void networkFault()"
         },
         {
-          "path": "firmware/src/main.cpp",
-          "find": "if (!wifiConnected)"
+          "path": "firmware/src/robot_runtime.cpp",
+          "find": "void networkTask("
         }
       ],
       "facts": [
         [
-          "シリアルログ",
-          "Wi-Fi接続・IP、HTTPステータス、通信エラー、JSON不正"
+          "Wi-Fi",
+          "自動再接続と10秒間隔の再試行"
         ],
         [
-          "通信復旧後",
-          "モーターの停止を維持。走行を再開しない"
+          "HTTP失敗",
+          "500msから最大10秒へバックオフ"
         ],
         [
-          "機体再起動",
-          "新しいbootIdで登録し直す"
+          "復旧",
+          "旧実行は停止。終端ACK後に新しい実行だけ受付"
         ]
       ],
       "flow": [
         {
-          "label": "Wi-Fi切断を検出",
-          "code": "WiFi.status()"
+          "label": "切断・通信エラーを検出",
+          "code": "networkFault()"
         },
         {
-          "label": "再接続・HTTPを再試行",
-          "code": "WiFi.reconnect()"
+          "label": "失敗世代を更新",
+          "code": "faultGeneration"
         },
         {
-          "label": "401・403・409なら再登録",
-          "code": "sessionIdを破棄 → register"
+          "label": "実行タスクが停止",
+          "code": "STOPPED / LINK_LOST"
+        },
+        {
+          "label": "再登録と停止報告",
+          "code": "ACK → IDLE"
         }
       ]
     },
     {
       "id": "tests",
-      "title": "接続管理の自動試験",
+      "title": "API・実行エンジン試験",
       "kind": "test",
-      "summary": "認証・切断・再起動を検証する。",
-      "body": "TestClientとテスト用SQLiteを使い、時刻を注入して期限を検証する。実機のWi-FiやGPIOはこの試験では計測しない。実機確認の完了報告と測定値の有無は接続試験記録に分けて残す。",
+      "summary": "APIと実機用の実行・解析コードを検証する。",
+      "body": "APIは隔離SQLiteと注入した時計で実行・停止・競合・再起動を検証する。ホスト試験は実機用のexecutor.cppとprogram_parser.cppを仮の出力とJournalで動かす。利用者はPhase 2の実機確認を完了。停止遅延などの定量測定値は未記録。",
       "inputs": [
         "pytest / tmp_path / 注入したclock"
       ],
@@ -1132,40 +1163,44 @@
       ],
       "sources": [
         {
-          "path": "apps/server/tests/test_connectivity.py",
-          "find": "def test_registration_and_timeout"
+          "path": "apps/server/tests/test_executions.py",
+          "find": "def test_execution_lifecycle("
         },
         {
-          "path": "docs/phase-1-verification.md",
-          "find": "## 記録"
+          "path": "firmware/test/executor_test.cpp",
+          "find": "int main("
+        },
+        {
+          "path": "docs/phase-2-verification.md",
+          "find": "## 必須の実機試験"
         }
       ],
       "facts": [
         [
-          "自動試験",
-          "認証、重複、順序、切断、再起動、設定変更、同時更新"
+          "API",
+          "既存17件＋Phase 2の30件（合計47件）"
         ],
         [
-          "実機確認",
-          "Phase 1は利用者が確認済みと報告"
+          "ホスト",
+          "実行・解析に加え、C++生成の全5状態をPythonのControlRequestで検証"
         ],
         [
-          "検証対象外",
-          "インターネット接続なしのLAN試験（項目11）"
+          "実機",
+          "Phase 1・Phase 2とも利用者が実機確認済み"
         ]
       ],
       "flow": [
         {
-          "label": "隔離したDBと時刻を用意",
-          "code": "tmp_path / clock"
+          "label": "APIとDBを隔離",
+          "code": "TestClient / SQLite / clock"
         },
         {
-          "label": "APIを呼び、結果を照合",
-          "code": "TestClient / pytest"
+          "label": "実機用の実行コードを動かす",
+          "code": "c++ / 仮モーター / Journal"
         },
         {
-          "label": "通信・認証・復旧を確認",
-          "code": "17件の自動試験"
+          "label": "利用者が実機確認を完了",
+          "code": "2026-11-19 / 定量測定値は未記録"
         }
       ]
     },
@@ -1270,13 +1305,418 @@
           "code": "Git"
         }
       ]
+    },
+    {
+      "id": "test-api",
+      "title": "試験実行とSTOP",
+      "kind": "server",
+      "summary": "運営者の命令を受付し、停止を要求する。",
+      "body": "create_test()はrequestIdの重複、機体の制御接続、走行有効化、占有と時間上限を検証する。受付時のcalibrationを固定してQUEUEDへ保存する。stop_test()は未配信なら取消し、配信後は停止報告を待つ。",
+      "inputs": [
+        "stationToken",
+        "requestId / MOVE・TURN・WAIT"
+      ],
+      "outputs": [
+        "executionId / 実行番号 / QUEUED",
+        "STOP_REQUESTED または STOPPED"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/executions.py",
+          "find": "def create_test("
+        },
+        {
+          "path": "apps/server/app/executions.py",
+          "find": "def stop_test("
+        }
+      ],
+      "facts": [
+        [
+          "受付",
+          "POST /api/robots/{robot_id}/test-executions"
+        ],
+        [
+          "確認",
+          "GET /api/test-executions/{execution_id}"
+        ],
+        [
+          "停止",
+          "POST /api/test-executions/{execution_id}/stop"
+        ],
+        [
+          "上限",
+          "1〜64命令 / 1命令5秒 / 全体30秒"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "権限・占有・重複を確認",
+          "code": "requestId / last_control"
+        },
+        {
+          "label": "時間と設定を固定",
+          "code": "execution_duration() / calibration"
+        },
+        {
+          "label": "実行待ちを保存",
+          "code": "QUEUED / executionSequence"
+        }
+      ]
+    },
+    {
+      "id": "execution-table",
+      "title": "SQLite / test_executions",
+      "kind": "data",
+      "summary": "命令列と実行状態を保持する。",
+      "body": "execution_sequenceはAUTOINCREMENT。個体ごとの未完了実行に部分一意索引を置く。STOP_REQUESTEDも未完了なので、通信断や停止要求だけでは再割当しない。DBを巻き戻すと機体の消費済み番号より小さくなる場合があり、運営者による復旧が必要。",
+      "inputs": [
+        "試験APIと制御通信"
+      ],
+      "outputs": [
+        "固定した命令・設定・実行番号",
+        "状態・命令位置・エラー"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/executions.py",
+          "find": "CREATE TABLE IF NOT EXISTS test_executions"
+        },
+        {
+          "path": "apps/server/app/executions.py",
+          "find": "CREATE UNIQUE INDEX IF NOT EXISTS one_active_test_per_robot"
+        }
+      ],
+      "facts": [
+        [
+          "未完了",
+          "QUEUED / DISPATCHED / RUNNING / STOP_REQUESTED"
+        ],
+        [
+          "終端",
+          "COMPLETED / STOPPED / ERROR"
+        ],
+        [
+          "重複要求",
+          "request_idの一意制約"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "受付",
+          "code": "QUEUED"
+        },
+        {
+          "label": "1回だけ配信",
+          "code": "DISPATCHED"
+        },
+        {
+          "label": "動作・停止報告",
+          "code": "RUNNING → 終端"
+        }
+      ]
+    },
+    {
+      "id": "control",
+      "title": "制御通信API",
+      "kind": "server",
+      "summary": "配信・状態報告・許可・STOP・ACKをまとめる。",
+      "body": "control()はセッションと増加するsequenceを照合する。STARTは1回だけ配信し、同じSTARTは再送しない。RUNNINGにはCONTINUE、停止要求にはSTOP、終端報告にはACKを返す。停止未確認の機体は占有を保持する。",
+      "inputs": [
+        "POST /api/robot-agent/control",
+        "version=2 / 状態 / executionId"
+      ],
+      "outputs": [
+        "START / CONTINUE / STOP / ACK / IDLE"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/main.py",
+          "find": "def control("
+        },
+        {
+          "path": "apps/server/app/executions.py",
+          "find": "def control("
+        }
+      ],
+      "flow": [
+        {
+          "label": "セッションと送信番号を照合",
+          "code": "sessionId / bootId / sequence"
+        },
+        {
+          "label": "実行状態を更新",
+          "code": "test_executions"
+        },
+        {
+          "label": "状態に応じて応答",
+          "code": "START / CONTINUE / STOP / ACK"
+        }
+      ],
+      "conditions": [
+        {
+          "when": "未配信QUEUEDをIDLE機体へ",
+          "result": "STARTを1回配信",
+          "tone": "ok"
+        },
+        {
+          "when": "同じ実行がRUNNING",
+          "result": "CONTINUE / 1500ms",
+          "tone": "ok"
+        },
+        {
+          "when": "停止要求・セッション変更",
+          "result": "STOP / 許可なし",
+          "tone": "warn"
+        },
+        {
+          "when": "終端報告",
+          "result": "ACK → IDLE",
+          "tone": "neutral"
+        }
+      ]
+    },
+    {
+      "id": "parser",
+      "title": "JSON命令の検証",
+      "kind": "robot",
+      "summary": "MOVE・TURN・WAITを固定長の命令列へ変換する。",
+      "body": "parseProgram()がUUID、実行番号、キャリブレーション、命令型、数値・個数・合計時間を検証する。MOVE・TURNから論理的な左右方向と時間を計算し、64命令以内の固定配列へ置く。反転はドライバ側で1回だけ行う。",
+      "inputs": [
+        "STARTのJSONとcalibration"
+      ],
+      "outputs": [
+        "Program / Command[64] または拒否"
+      ],
+      "sources": [
+        {
+          "path": "firmware/src/program_parser.cpp",
+          "find": "bool parseProgram("
+        },
+        {
+          "path": "firmware/include/executor.h",
+          "find": "struct Program"
+        }
+      ],
+      "facts": [
+        [
+          "MOVE",
+          "FORWARD / BACKWARD、1〜10マス"
+        ],
+        [
+          "TURN",
+          "LEFT / RIGHT、90度相当"
+        ],
+        [
+          "WAIT",
+          "1〜5000ms、左右出力0"
+        ],
+        [
+          "上限",
+          "1命令5秒、全体30秒"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "型と値を検証",
+          "code": "JSON / calibration"
+        },
+        {
+          "label": "論理方向と時間へ変換",
+          "code": "left / right / durationMs"
+        },
+        {
+          "label": "固定長配列へ格納",
+          "code": "Program.commands"
+        }
+      ]
+    },
+    {
+      "id": "executor",
+      "title": "モーター実行タスク",
+      "kind": "robot",
+      "summary": "core 1で時間制御と停止期限を監視する。",
+      "body": "motorTask()がキューを処理し、Executor.tick()で命令時間と許可期限を確認する。HTTPは行わない。出力前に番号を永続化し、GPIO直前にも期限と通信失敗世代を確認する。終端はACKまで保持し、遅いCONTINUEやSTARTでは再開しない。",
+      "inputs": [
+        "検証済みProgramと許可期限",
+        "STOP / ACK / 通信失敗世代"
+      ],
+      "outputs": [
+        "左右モーター出力",
+        "状態と命令位置のスナップショット"
+      ],
+      "sources": [
+        {
+          "path": "firmware/src/robot_runtime.cpp",
+          "find": "void motorTask("
+        },
+        {
+          "path": "firmware/src/executor.cpp",
+          "find": "void Executor::tick("
+        },
+        {
+          "path": "firmware/src/executor.cpp",
+          "find": "void Executor::start("
+        }
+      ],
+      "facts": [
+        [
+          "配置",
+          "core 1 / priority 3"
+        ],
+        [
+          "周期",
+          "2ms目標。実機遅延は未測定"
+        ],
+        [
+          "完了",
+          "命令終了。ゴール到達の判定ではない"
+        ],
+        [
+          "走行ゲート",
+          "ROBOT_MOTION_ENABLED。NVS保存が失敗した場合も出力しない"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "キューと失敗世代を確認",
+          "code": "Frame / faultGeneration"
+        },
+        {
+          "label": "開始前に番号を保存",
+          "code": "Journal.consume()"
+        },
+        {
+          "label": "時間を見て次の命令へ",
+          "code": "Executor.tick()"
+        },
+        {
+          "label": "終端を報告して保持",
+          "code": "COMPLETED / STOPPED / ERROR → ACK"
+        }
+      ]
+    },
+    {
+      "id": "journal",
+      "title": "NVS / 消費済み番号",
+      "kind": "data",
+      "summary": "出力前に実行番号を保存し、再実行を拒否する。",
+      "body": "NvsJournalはPreferencesで最大消費済み番号を保持する。それ以下の番号は再起動後も拒否する。putULong()で4byteの保存成功を確認できない場合は走行しない。DBを削除・復元して番号が巻き戻った場合も自動リセットしない。",
+      "inputs": [
+        "executionSequence"
+      ],
+      "outputs": [
+        "最大消費済み番号 / 保存成否"
+      ],
+      "sources": [
+        {
+          "path": "firmware/src/robot_runtime.cpp",
+          "find": "class NvsJournal"
+        },
+        {
+          "path": "firmware/src/executor.cpp",
+          "find": "journal_.consume(program.sequence)"
+        }
+      ],
+      "facts": [
+        [
+          "NVS",
+          "robot-executor / consumed"
+        ],
+        [
+          "拒否",
+          "新番号が保存済み以下ならREPLAYED_EXECUTION"
+        ],
+        [
+          "保存失敗",
+          "JOURNAL_FAILURE / 出力なし"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "番号を比較",
+          "code": "sequence > highWater"
+        },
+        {
+          "label": "先にNVSへ保存",
+          "code": "Preferences.putULong()"
+        },
+        {
+          "label": "成功した実行だけ開始",
+          "code": "Executor.start()"
+        }
+      ]
+    },
+    {
+      "id": "lease",
+      "title": "許可期限と安全停止",
+      "kind": "robot",
+      "summary": "通信待ち中も、期限切れなら停止する。",
+      "body": "許可期限は機体の要求送信開始から1500ms。ネットワーク失敗は世代番号で伝え、古いキューフレームを拒否する。実行期限を過ぎたCONTINUEは復活させない。設計周期と物理的な停止遅延の保証は区別し、実機で測定する。",
+      "inputs": [
+        "送信開始時刻 / leaseMs=1500",
+        "STOP / 通信失敗 / 時間上限"
+      ],
+      "outputs": [
+        "STOPPED / 理由コード",
+        "自動再開なし"
+      ],
+      "sources": [
+        {
+          "path": "firmware/src/robot_runtime.cpp",
+          "find": "frame.deadline = requestStartedAt"
+        },
+        {
+          "path": "firmware/src/executor.cpp",
+          "find": "void Executor::renew("
+        },
+        {
+          "path": "firmware/src/executor.cpp",
+          "find": "void Executor::fault("
+        }
+      ],
+      "facts": [
+        [
+          "許可",
+          "1500ms。受信時刻から数え直さない"
+        ],
+        [
+          "通信断",
+          "別タスクで停止。HTTPタイムアウトに依存しない"
+        ],
+        [
+          "3秒OFFLINE",
+          "接続の表示。走行停止の期限とは別"
+        ],
+        [
+          "実測",
+          "利用者が実機確認済み。停止遅延・惰性の測定値は未記録"
+        ]
+      ],
+      "flow": [
+        {
+          "label": "要求を送った時点で期限を決定",
+          "code": "requestStartedAt + 1500"
+        },
+        {
+          "label": "期限と失敗を監視",
+          "code": "motorTask / Executor.tick()"
+        },
+        {
+          "label": "停止を固定",
+          "code": "STOPPED"
+        },
+        {
+          "label": "終端ACK後にだけ待機へ",
+          "code": "IDLE"
+        }
+      ]
     }
   ],
   "views": [
     {
       "id": "overview",
       "title": "全体構成",
-      "description": "端末・MacBook・ESP32の役割と、実装済みの通信経路。",
+      "description": "端末・MacBook・ESP32と、Phase 2の試験実行・停止の経路。",
       "positions": [
         {
           "id": "station",
@@ -1306,26 +1746,31 @@
         {
           "id": "motors",
           "x": 736,
-          "y": 316
+          "y": 510
         },
         {
           "id": "future",
           "x": 32,
           "y": 510
+        },
+        {
+          "id": "executor",
+          "x": 736,
+          "y": 316
         }
       ],
       "edges": [
         {
           "source": "station",
           "target": "api",
-          "label": "GET /api/robots",
+          "label": "一覧・試験・STOP",
           "kind": "call",
           "description": ""
         },
         {
           "source": "agent",
           "target": "api",
-          "label": "POST 登録・Heartbeat",
+          "label": "登録・制御通信",
           "kind": "call",
           "description": ""
         },
@@ -1345,10 +1790,17 @@
         },
         {
           "source": "agent",
-          "target": "motors",
-          "label": "停止出力",
+          "target": "executor",
+          "label": "キュー / 状態報告",
           "kind": "control",
-          "description": ""
+          "description": "HTTPはcore 0、実行とGPIOはcore 1。共有状態は短いクリティカルセクションでスナップショットを渡す。"
+        },
+        {
+          "source": "executor",
+          "target": "motors",
+          "label": "許可中だけ出力",
+          "kind": "control",
+          "description": "出力直前にも許可期限と通信失敗世代を照合する。"
         }
       ],
       "steps": [
@@ -1360,17 +1812,17 @@
         {
           "node": "agent",
           "title": "ESP32から報告する",
-          "text": "ESP32がHTTP通信を開始する。サーバーからESP32への直接接続はない。"
+          "text": "core 0の通信タスクが登録と制御通信を送る。core 1で別に実行する。"
         },
         {
           "node": "store",
           "title": "個体情報を保持する",
-          "text": "認証・登録・HeartbeatをStoreが保存し、一覧要求時に状態を計算する。"
+          "text": "個体と試験実行を保存し、未完了の機体への二重受付を防ぐ。"
         },
         {
           "node": "future",
           "title": "次のフェーズ",
-          "text": "Blockly・予約・走行は未実装。今回の線はPhase 1の実経路だけ。"
+          "text": "予約・Blockly・ASTは未実装。Phase 2の実行エンジンは利用者が実機確認済み。"
         }
       ],
       "groups": [
@@ -1501,8 +1953,8 @@
     },
     {
       "id": "communication",
-      "title": "登録とHeartbeat",
-      "description": "認証から入力検証、セッション更新、応答までをたどる。",
+      "title": "登録と制御通信",
+      "description": "旧登録から、新版の制御通信・許可更新・終端報告へ。",
       "positions": [
         {
           "id": "agent",
@@ -1530,12 +1982,12 @@
           "y": 324
         },
         {
-          "id": "heartbeat",
+          "id": "control",
           "x": 736,
           "y": 324
         },
         {
-          "id": "motors",
+          "id": "executor",
           "x": 32,
           "y": 532
         },
@@ -1569,8 +2021,8 @@
         },
         {
           "source": "schemas",
-          "target": "heartbeat",
-          "label": "Heartbeat",
+          "target": "control",
+          "label": "version=2 / control",
           "kind": "call",
           "description": ""
         },
@@ -1582,9 +2034,9 @@
           "description": ""
         },
         {
-          "source": "heartbeat",
+          "source": "control",
           "target": "database",
-          "label": "新sequenceで時刻更新",
+          "label": "状態と接続を更新",
           "kind": "data",
           "description": ""
         },
@@ -1597,10 +2049,10 @@
         },
         {
           "source": "poll",
-          "target": "motors",
-          "label": "停止を維持",
+          "target": "executor",
+          "label": "許可期限を照合",
           "kind": "control",
-          "description": ""
+          "description": "制御フレームと通信失敗世代を実行タスクへ渡し、期限切れ・STOP・通信失敗で停止を固定する。"
         }
       ],
       "steps": [
@@ -1620,14 +2072,145 @@
           "text": "起動単位のbootIdに対してsessionIdを返す。再試行では同じsessionIdを使う。"
         },
         {
-          "node": "heartbeat",
-          "title": "接続時刻を更新",
-          "text": "新しいsequenceだけlast_seenを更新する。重複は接続期限を延ばさない。"
+          "node": "control",
+          "title": "実行状態を交換",
+          "text": "未配信命令を1回だけ渡し、実行中の許可更新・STOP・終端ACKを返す。"
         },
         {
           "node": "poll",
           "title": "応答後に次を送る",
-          "text": "成功なら500ms後。失敗なら間隔を延ばし、401・403・409なら登録へ戻る。"
+          "text": "要求の送信開始から1500msを期限とする。遅れて届いた許可では停止済み実行を復活させない。"
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "execution",
+      "title": "実行と停止",
+      "description": "試験受付から、1回限りの配信・永続化・GPIO出力・停止まで。",
+      "positions": [
+        {
+          "id": "test-api",
+          "x": 32,
+          "y": 116
+        },
+        {
+          "id": "execution-table",
+          "x": 384,
+          "y": 116
+        },
+        {
+          "id": "control",
+          "x": 736,
+          "y": 116
+        },
+        {
+          "id": "agent",
+          "x": 736,
+          "y": 324
+        },
+        {
+          "id": "parser",
+          "x": 384,
+          "y": 324
+        },
+        {
+          "id": "executor",
+          "x": 32,
+          "y": 324
+        },
+        {
+          "id": "motors",
+          "x": 32,
+          "y": 532
+        },
+        {
+          "id": "journal",
+          "x": 384,
+          "y": 532
+        },
+        {
+          "id": "lease",
+          "x": 736,
+          "y": 532
+        }
+      ],
+      "edges": [
+        {
+          "source": "test-api",
+          "target": "execution-table",
+          "label": "受付 / STOP要求",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "control",
+          "target": "execution-table",
+          "label": "状態と許可を更新",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "agent",
+          "target": "control",
+          "label": "状態報告 / 応答",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "agent",
+          "target": "parser",
+          "label": "STARTを検証",
+          "kind": "control",
+          "description": ""
+        },
+        {
+          "source": "parser",
+          "target": "executor",
+          "label": "固定長Program",
+          "kind": "control",
+          "description": ""
+        },
+        {
+          "source": "executor",
+          "target": "motors",
+          "label": "左右方向 / 時間",
+          "kind": "control",
+          "description": ""
+        },
+        {
+          "source": "executor",
+          "target": "journal",
+          "label": "出力前に番号保存",
+          "kind": "data",
+          "description": ""
+        }
+      ],
+      "steps": [
+        {
+          "node": "test-api",
+          "title": "試験を受け付ける",
+          "text": "個体の準備・走行有効化・占有・重複・時間を照合して受付する。"
+        },
+        {
+          "node": "control",
+          "title": "1回だけ配信",
+          "text": "STARTの配信後は再送しない。実行の確認が不明なら停止へ進む。"
+        },
+        {
+          "node": "journal",
+          "title": "番号を先に保存",
+          "text": "永続保存に成功するまで出力しない。同じ番号は再起動後も拒否する。"
+        },
+        {
+          "node": "executor",
+          "title": "順番に実行する",
+          "text": "MOVE・TURN・WAITを時間制御し、HTTPとは別タスクで期限を監視する。"
+        },
+        {
+          "node": "lease",
+          "title": "停止を固定する",
+          "text": "STOP・通信失敗・期限切れで停止する。終端ACK後に新実行を受け付ける。"
         }
       ],
       "groups": []
@@ -1663,7 +2246,7 @@
           "y": 324
         },
         {
-          "id": "motors",
+          "id": "executor",
           "x": 32,
           "y": 532
         },
@@ -1716,17 +2299,17 @@
         },
         {
           "source": "reconnect",
-          "target": "motors",
+          "target": "executor",
           "label": "復旧しても停止",
           "kind": "control",
-          "description": ""
+          "description": "制御フレームと通信失敗世代を実行タスクへ渡し、期限切れ・STOP・通信失敗で停止を固定する。"
         }
       ],
       "steps": [
         {
           "node": "presence",
           "title": "切断を表示",
-          "text": "正常通信から3秒以上たった機体は一覧上でOFFLINE。statusの定期書き換えはない。"
+          "text": "接続表示は3秒でOFFLINE。実行状態と停止確認はexecutionStatusで別に扱う。"
         },
         {
           "node": "initialize",
@@ -1739,14 +2322,14 @@
           "text": "Wi-Fi再接続とHTTP再試行を行い、409なら登録し直す。"
         },
         {
-          "node": "motors",
+          "node": "executor",
           "title": "停止を保つ",
-          "text": "Phase 1は走行命令を持たず、復旧してもLOW出力を維持する。"
+          "text": "通信失敗・許可失効で停止する。復旧後も旧実行は再開しない。"
         },
         {
           "node": "tests",
           "title": "検証範囲を読む",
-          "text": "17件の自動試験と利用者による実機確認を記録。項目11は対象外。"
+          "text": "APIとホスト上の実行・解析コードで確認する。Phase 2は利用者が実機確認済み。定量測定値は未記録。"
         }
       ],
       "groups": []
