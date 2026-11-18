@@ -1,4 +1,5 @@
 import hmac
+import logging
 import os
 import time
 from collections.abc import Callable
@@ -6,12 +7,21 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config import REPOSITORY_ROOT, WorkshopConfig, load_config
+from app.execution_models import (
+    ControlRequest,
+    ControlResponse,
+    TestExecutionRequest,
+    TestExecutionView,
+)
+from app.executions import ExecutionError, ExecutionStore
 from app.schemas import AgentResponse, HeartbeatRequest, RegisterRequest, RobotView
-from app.store import SessionConflict, Store, token_digest
+from app.store import SessionConflict, token_digest
 
 bearer = HTTPBearer(auto_error=False)
 Credentials = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
@@ -22,7 +32,7 @@ def create_app(
     db_path: Path | None = None,
     clock: Callable[[], float] = time.time,
 ) -> FastAPI:
-    store = Store(
+    store = ExecutionStore(
         db_path
         or Path(os.environ.get("WORKSHOP_DB", str(REPOSITORY_ROOT / "data/workshop.sqlite3")))
     )
@@ -34,7 +44,18 @@ def create_app(
         application.state.settings = settings
         yield
 
-    api = FastAPI(title="Robot Workshop API", version="0.1.0", lifespan=lifespan)
+    api = FastAPI(title="Robot Workshop API", version="0.2.0", lifespan=lifespan)
+
+    @api.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, error: RequestValidationError):
+        if request.url.path == "/api/robot-agent/control":
+            fields = ", ".join(
+                f"{'.'.join(str(part) for part in item['loc'])} ({item['type']})"
+                for item in error.errors()
+            )
+            # 入力値・資格情報を出さず、拒否した項目と検証の種類だけを記録する。
+            logging.getLogger(__name__).warning("Robot control report rejected: %s", fields)
+        return await request_validation_exception_handler(request, error)
 
     def require_token(credentials: Credentials) -> str:
         if credentials is None:
@@ -56,7 +77,7 @@ def create_app(
 
     @api.get("/api/health")
     def health():
-        return {"status": "ok", "protocolVersion": 1, "phase": 1}
+        return {"status": "ok", "protocolVersion": 1, "phase": 2}
 
     @api.get("/api/robots", response_model=list[RobotView], dependencies=[Depends(require_station)])
     def robots():
@@ -78,6 +99,46 @@ def create_app(
         except SessionConflict as error:
             raise HTTPException(409, str(error)) from error
         return AgentResponse(session_id=body.session_id)
+
+    @api.post("/api/robot-agent/control", response_model=ControlResponse)
+    def control(body: ControlRequest, robot_id: Annotated[str, Depends(require_robot)]):
+        try:
+            return store.control(robot_id, body, clock())
+        except SessionConflict as error:
+            raise HTTPException(409, str(error)) from error
+
+    @api.post(
+        "/api/robots/{robot_id}/test-executions",
+        response_model=TestExecutionView,
+        dependencies=[Depends(require_station)],
+    )
+    def create_test_execution(robot_id: str, body: TestExecutionRequest):
+        try:
+            return store.create_test(robot_id, body, clock())
+        except ExecutionError as error:
+            raise HTTPException(error.status_code, error.code) from error
+
+    @api.get(
+        "/api/test-executions/{execution_id}",
+        response_model=TestExecutionView,
+        dependencies=[Depends(require_station)],
+    )
+    def get_test_execution(execution_id: str):
+        try:
+            return store.get_test(execution_id)
+        except ExecutionError as error:
+            raise HTTPException(error.status_code, error.code) from error
+
+    @api.post(
+        "/api/test-executions/{execution_id}/stop",
+        response_model=TestExecutionView,
+        dependencies=[Depends(require_station)],
+    )
+    def stop_test_execution(execution_id: str):
+        try:
+            return store.stop_test(execution_id, clock())
+        except ExecutionError as error:
+            raise HTTPException(error.status_code, error.code) from error
 
     return api
 

@@ -4,6 +4,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
+from app.execution_models import Calibration
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -12,6 +14,8 @@ class RobotConfig(BaseModel):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,47}$")
     display_name: str = Field(alias="displayName", min_length=1, max_length=80)
     token: SecretStr
+    motion_enabled: bool = Field(default=False, alias="motionEnabled", strict=True)
+    calibration: Calibration = Field(default_factory=Calibration)
 
     @field_validator("token")
     @classmethod

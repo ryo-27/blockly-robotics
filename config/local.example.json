@@ -4,7 +4,16 @@
     {
       "id": "robot-01",
       "displayName": "ロボットA",
-      "token": "replace-with-a-unique-random-robot-01-token"
+      "token": "replace-with-a-unique-random-robot-01-token",
+      "motionEnabled": false,
+      "calibration": {
+        "invertLeft": false,
+        "invertRight": true,
+        "forwardOneCellMs": 500,
+        "backwardOneCellMs": 500,
+        "turnLeft90Ms": 330,
+        "turnRight90Ms": 330
+      }
     }
   ]
 }

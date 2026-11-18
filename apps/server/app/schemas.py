@@ -38,3 +38,7 @@ class RobotView(Message):
     status: Literal["OFFLINE", "IDLE"]
     last_seen_at: str | None
     firmware_version: str | None
+    agent_protocol: int = 1
+    motion_enabled: bool = False
+    execution_id: UUID | None = None
+    execution_status: str | None = None

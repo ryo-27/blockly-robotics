@@ -47,6 +47,19 @@ class Store:
                     firmware_version TEXT
                 )
             """)
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(robots)")}
+            for name, definition in {
+                "agent_protocol": "INTEGER NOT NULL DEFAULT 1",
+                "agent_status": "TEXT NOT NULL DEFAULT 'IDLE'",
+                "last_control": "REAL",
+                "motion_enabled": "INTEGER NOT NULL DEFAULT 0",
+                "calibration": "TEXT NOT NULL DEFAULT '{}'",
+            }.items():
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE robots ADD COLUMN {name} {definition}")
+            conn.execute(
+                "UPDATE robots SET last_control=NULL, agent_protocol=1, agent_status='IDLE'"
+            )
             # A restart never trusts a pre-restart connection or session.
             conn.execute("UPDATE robots SET enabled=0, session_id=NULL, last_seen=NULL")
             for robot in config.robots:
@@ -57,6 +70,14 @@ class Store:
                         token_hash=excluded.token_hash, enabled=1
                 """,
                     (robot.id, robot.display_name, token_digest(robot.token.get_secret_value())),
+                )
+                conn.execute(
+                    "UPDATE robots SET motion_enabled=?, calibration=? WHERE id=?",
+                    (
+                        robot.motion_enabled,
+                        robot.calibration.model_dump_json(by_alias=True),
+                        robot.id,
+                    ),
                 )
 
     def authenticate(self, token: str) -> str | None:
