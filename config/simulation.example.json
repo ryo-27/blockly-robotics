@@ -1,0 +1,47 @@
+{
+  "stationToken": "simulation-only-station-token-not-for-real-use",
+  "robots": [
+    {
+      "id": "sim-robot-01",
+      "displayName": "ロボットA（模擬）",
+      "token": "simulation-only-robot-01-token-not-for-real-use",
+      "motionEnabled": true,
+      "calibration": {
+        "invertLeft": false,
+        "invertRight": true,
+        "forwardOneCellMs": 500,
+        "backwardOneCellMs": 500,
+        "turnLeft90Ms": 450,
+        "turnRight90Ms": 450
+      }
+    },
+    {
+      "id": "sim-robot-02",
+      "displayName": "ロボットB（模擬）",
+      "token": "simulation-only-robot-02-token-not-for-real-use",
+      "motionEnabled": true,
+      "calibration": {
+        "invertLeft": false,
+        "invertRight": true,
+        "forwardOneCellMs": 500,
+        "backwardOneCellMs": 500,
+        "turnLeft90Ms": 450,
+        "turnRight90Ms": 450
+      }
+    },
+    {
+      "id": "sim-robot-03",
+      "displayName": "ロボットC（模擬）",
+      "token": "simulation-only-robot-03-token-not-for-real-use",
+      "motionEnabled": true,
+      "calibration": {
+        "invertLeft": false,
+        "invertRight": true,
+        "forwardOneCellMs": 500,
+        "backwardOneCellMs": 500,
+        "turnLeft90Ms": 450,
+        "turnRight90Ms": 450
+      }
+    }
+  ]
+}
