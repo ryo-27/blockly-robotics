@@ -320,6 +320,7 @@
   }
   function drawFileIndex() {
     const groups=[
+      ["画面・Blockly",(p)=>p.startsWith("apps/web/")],
       ["サーバー",(p)=>p.startsWith("apps/server/app/")],
       ["ESP32",(p)=>p.startsWith("firmware/")],
       ["設定・依存関係・検証",(p)=>p.startsWith("config/")||p===".gitignore"||p.startsWith("apps/server/")],
@@ -345,7 +346,7 @@
     });
     root.append(el("section",{class:"file-group"},[
       el("h2",{},"ローカル設定・生成物（内容は収録しません）"),
-      ...[["config/local.json","サーバーの個体・トークン設定","server-config"],["firmware/include/robot_config.h","機体のWi-Fi・接続先・トークン設定","firmware-config"],["data/workshop.sqlite3","実行時の個体情報。現在はrobots表のみ","database"]].map(([path,text,node])=>el("div",{class:"file-row"},[
+      ...[["config/local.json","サーバーの個体・トークン設定","server-config"],["firmware/include/robot_config.h","機体のWi-Fi・接続先・トークン設定","firmware-config"],["data/workshop.sqlite3","個体・参加者・保存プログラム・予約・実行・イベントを保持","database"]].map(([path,text,node])=>el("div",{class:"file-row"},[
         el("div",{},[el("code",{},path),el("p",{},text)]),el("div",{class:"file-actions"},el("button",{onclick:()=>selectNode(node)},"設定・動作を見る"))
       ]))
     ]));

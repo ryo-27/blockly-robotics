@@ -2,6 +2,8 @@
 
 Phase 1は実機確認済み。Phase 2は実行エンジンと運営者用の試験APIを実装し、2026年11月19日に利用者が実機確認を完了した。
 Phase 3は参加者・保存・予約・通常実行を実装し、自動試験済み。2026年11月20日に利用者が予約から実行完了までの実機確認を完了した。
+2026年11月21日に利用者から画面での単機実行確認完了の報告を受け、Phase 4の実機確認を完了した。
+Phase 5は実装・模擬検証・単機確認済み。複数機での実機確認は2・3台目の完成後に行う。
 要求の原本は [設計仕様書](system-design.md)、処理・設定・ファイルの対応は
 [システムマップ](system-map/index.html)、通信契約は [protocol.md](protocol.md) を参照する。
 
@@ -9,7 +11,7 @@ Phase 3は参加者・保存・予約・通常実行を実装し、自動試験�
 
 MacBook上のFastAPIが、事前登録した個体をBearerトークンで認証する。
 SQLiteには個体のトークンのSHA-256だけを保存し、設定ファイルには元の資格情報を保持する。
-LAN内HTTPで運用し、単一プロセスを前提にする。React / BlocklyはPhase 4で追加する。
+LAN内HTTPで運用し、単一プロセスを前提にする。React / Blocklyの画面をapps/webに実装し、ビルド後は同じFastAPIから配信する。
 
 - `app/config.py`：個体ID・トークン、走行有効化、キャリブレーションの設定。
 - `app/main.py`：認証とHTTPの入口、lifespanで設定・DBを初期化。
@@ -17,41 +19,49 @@ LAN内HTTPで運用し、単一プロセスを前提にする。React / Blockly�
 - `app/store.py`：個体と接続の永続化、既存robots表への列追加、接続状態の算出。
 - `app/execution_models.py`：MOVE / TURN / WAIT、制御メッセージ、実行上限の検証。
 - `app/executions.py`：ExecutionStore。試験・通常実行共通の採番、排他、STOP、許可更新、終端ACKとイベント。
-- `app/workshop_models.py`：参加者・Program AST・予約・通常実行の型、REPEAT展開とサイズ上限。
-- `app/workshop.py`：WorkshopStore。所有者認証、保存のバージョン、予約期限、実行スナップショット。
-- `app/workshop_api.py`：参加者・プログラム・予約・実行履歴・イベントのHTTP入口。
+- `app/workshop_models.py`：指示AST・通常実行の型、REPEAT展開とサイズ上限。
+- `app/workshop.py`：WorkshopStore。直接送信、機体の利用可否、実行スナップショット。
+- `app/workshop_api.py`：直接送信・実行履歴・イベント・DB閲覧のHTTP入口。
 - `tests/`：接続・認証・実行管理のAPI試験。
 
-## 保存と参加者の権限
+## 永続化と旧データの整理（2026年11月21日）
 
-現在の表は `robots`、`participant_sessions`、`programs`、`reservations`、`executions`、`robot_events`。
-Phase 2の `test_executions` は表名変更で `executions` に移行し、削除済み行を含むAUTOINCREMENTの最高値を保持する。
-既存の実行番号を維持するため、DBやESP32のNVSを消さない。両方の表が存在する不整合は起動を拒否する。
-試験と通常実行は同じ表・部分一意索引を使い、機体ごとの未完了実行を1つへ制限する。
+現在の表は `robots`、`executions`、`robot_events`、`sqlite_sequence`。
+参加者・保存プログラム・予約のAPIを撤去し、`app/storage_migration.py`が旧3テーブルを削除する。
+全実行の終端を確認してからDBを`data/backups/`に退避し、旧表・旧予約イベントを削除し、実行内の旧参照をnullにする。
+実行中・停止確認待ちがあれば、DBや接続状態を変更する前に起動を拒否する。
+再起動で旧表を再作成せず、バックアップも追加しない。バックアップは秘密設定と同様Git対象外。
+実行履歴・requestIdとsqlite_sequenceは保持し、二重実行と消費済み番号の再利用を防ぐ。
+Phase 2のtest_executionsは表名変更でexecutionsへ移行し、削除済み行を含む採番最高値を保持する。
 
-stationTokenは参加者セッションの発行・失効、機体予約、通常実行開始、全件確認に使う。
-参加者のsessionTokenは発行時だけ返し、DBにはSHA-256を保存する。有効期限は既定8時間。
-参加者は自分のプログラム作成・更新・取得、自分の予約確認・解放、実行履歴とSTOPを操作できる。
-ロボット用トークンではこれらを操作できない。予約と実行開始はステーションのみが行う。
+指示のASTはversion=1、REPEATは1〜20回、入れ子3段まで。展開後64命令、AST JSONはUTF-8で32kBまで。
+機体のcalibrationで時間上限を検証し、受付時に元のAST・展開命令・calibrationを固定する。
+stationTokenで一覧・送信・履歴・STOP・DB閲覧を認証する。機体トークンには運営者の権限を与えない。
 
-ProgramはBlockly workspace（保存のみ）とversion=1のASTを保持する。REPEATは1〜20回、入れ子3段まで。
-展開後64命令まで、ASTはUTF-8 JSON 32kB、workspaceは200kBまで。任意コードは実行しない。
-PUTはexpectedVersionが一致した時だけversionを進め、同時編集による上書きを防ぐ。
-通常実行はprogramVersionも照合し、展開済み命令と機体のcalibrationを固定する。
-保存後の編集は受付済み実行へ影響しない。実行時間は機体のcalibrationで受付時に検証する。
+## 機体と指示を中心にした画面（2026年11月20日変更）
 
-## 予約から実行完了
+参加者の学習進行は手元のプリントで管理する。端末は指示編集・作成後の機体選択・送信・停止を担当し、
+参加者の発行・切替、名前付き保存一覧、個人別の学習進捗を持たない。
 
-RESERVEDの期限は既定60秒。更新APIで明示的に延長できる。
-未使用の予約はAPI参照・変更時に失効を判定し、常駐の期限監視タスクは持たない。
-開始時には所有者・プログラムの版・予約・機体の状態を同じBEGIN IMMEDIATE内で照合する。
-通常実行の作成とIN_USEへの変更は一括で確定する。予約中の機体へ試験APIで割り込むこともできない。
+- `apps/web/src/App.tsx`：共通下書き、指示の固定、送信先選択、直接送信と停止。
+- `apps/web/src/ManagementPanel.tsx`：機体状態・接続・開発用DB閲覧をまとめた管理パネル。
+- `app/inspection.py`：mode=roとquery_onlyによる許可済みテーブルの閲覧、資格情報の非表示、ページ上限。
+- `apps/web/src/Editor.tsx`：Blocklyの生成・破棄、サイズ変更とJSON復元、実行ブロックの強調。
+- `apps/web/src/blocks.ts`：日本語の独自ブロックとASTの変換・検証。
+- `apps/web/src/station.ts`：機体・AST・requestIdの送信スナップショット。同じ要求で結果を再確認する。
+- `apps/web/src/api.ts`：同一オリジンのBearer認証、エラーとLAN内HTTP用UUID。
+- `app/workshop.py`のcreate_station_execution：参加者・保存・予約を作らず、機体の排他と受付を同じトランザクションで確定。
+- `app/web.py`：ビルドがある場合の同一オリジン静的配信。APIとSwaggerを優先する。
+- `tests/test_station.py`：直接送信の認証、重複防止、競合、3台独立動作、再起動を検証。
 
-IN_USEは時間経過や通信断で解放せず、COMPLETED / STOPPED / ERRORの確定後にFINISHEDへ変える。
-未配信QUEUEDの取消しは即STOPPEDとできる。配信済みはSTOP_REQUESTEDで機体の停止報告を待つ。
-参加者の明示的な失効は未使用予約を失効させ、実行中なら停止を要求する。
-参加者トークンの自然失効は新しい操作を拒否するが、受付済み実行は既存の走行許可期限で管理する。
-サーバー再起動後も停止待ちの占有を保持する。状態と命令位置の変化、予約の遷移はrobot_eventsへ保存する。
+stationTokenは端末の接続設定としてsessionStorageに保持する。機体に属さない作成中の下書きと、機体に固定した未確認の送信内容を同じタブに保持する。
+画面は再読込だけで指示を送らず、応答が不明な場合に同じ内容・IDで再確認する。実行中でも他の機体へ切り替えられる。
+サーバーはkind=STATIONの実行へ元のAST・展開命令・calibrationを固定し、個人識別子と保存プログラム・予約への参照はnullにする。
+機体の排他とSTOPは試験実行と共通。停止確認までは次の実行を割り当てない。
+学習履歴は画面で扱わず、通信・停止・二重実行防止の運用記録だけをサーバーへ残す。
+
+旧Program・Session・Reservation APIとテーブルは廃止した。
+模擬エージェントは実機と分離したsim-IDだけを扱い、3台でのUI・通信試験に使う。実機の配線や負荷試験の代わりにはならない。
 
 ## ESP32
 
@@ -100,5 +110,39 @@ GPIO方向の補正と命令の前後・左右を二重に反転しない。
 
 API試験・ホスト上のファームウェア試験・ESP32向けビルドで検証する。
 実機確認の完了報告と再試験の手順は [Phase 2の試験記録](phase-2-verification.md) に保持する。
-Phase 3の予約→保存プログラム実行→完了の確認は [Phase 3の手順](phase-3-verification.md) を使う。
-Phase 4でBlockly UI、Phase 5で3台の実環境運用を検証する。
+廃止したPhase 3の予約→保存プログラム実行→完了の当時の記録は [Phase 3の手順](phase-3-verification.md) を使う。
+Phase 4・5の実装と模擬ブラウザ確認は済み。画面からの実機実行と3台実環境運用は
+[Phase 4](phase-4-verification.md)・[Phase 5](phase-5-verification.md)の手順で確認する。
+
+## 固定画面と開発用DB閲覧（2026年11月21日）
+
+通常画面は100dvhのFlexレイアウトとmin-height:0で、全面のBlockly編集と下端の送信・停止を収める。
+指示の自動一覧と送信前の要約、下部の説明文は表示しない。管理は中央モーダルへ集約する。
+指示作成中に機体を決めず、captureInstructions()で指示を固定してから機体選択を開く。
+機体選択・確認だけでは実行を作らず、機体名付きボタンの操作で初めてPOSTする。
+下書きはworkspaceDraft。旧機体別下書きは最後に編集していたものだけを初回の候補として引き継ぐ。
+
+管理パネル内のDB確認は、既存のWorkshopStore.pathを読み取り専用で参照する。
+表名は固定の許可リスト、ページは既定25・最大100行、各テキストは4000文字まで。
+token_hashは非表示。SQL実行や編集は提供せず、DB不在時もファイルを作らない。
+DBの読取接続はStore.connection()のBEGIN IMMEDIATEを使わず、短いタイムアウトとクエリ期限を持つ。
+
+Blocklyの初期倍率は0.95 ÷ 1.2（約79%）。中央ボタンはscrollCenter()で現在の倍率を維持する。
+
+## クエストとif（2026年11月21日実装）
+
+送信先ロボットは必須、クエストは任意。ifを使う場合はマップが必要なためクエスト選択を必須とする。
+if条件は「前に進めるか」と「今いるマスの種類」を用意し、サーバーが開始位置・向きから順に計算する。
+分岐・繰り返しを解決した既存の命令列をESP32へ送る。送信前に正誤や経路は表示しない。
+岩・マップ外へ入る移動は送信を止めるが、ゴール未達でも実機で試せる。
+クリア条件はマップ上で実行終了時にゴール位置へ到達していること。最後の向き・経由地点の順序・最小ブロック数は判定しない。
+これは命令どおりに動いた場合の論理判定であり、センサーによる実機の到着確認ではない。
+
+実装は`app/quests.py`、マップの正本は公開設定`config/quests.json`。教材の8マップを基にし、ゴールの向きや経由条件は取り込まない。
+調査ポイントはON_CELLの条件用マーカーとして保持する。Q06は開始位置とゴールが同じで、終了位置だけを判定する。
+ASTはIFのcondition・body・elseBodyを持ち、IF/REPEATの入れ子は合計3段、構文全体64ノード・32kBまで。
+選ばれた分岐の展開結果は64命令・1命令5秒・全体30秒まで。送信時にサーバーが全移動経路を確認し、違反時は実行を保存しない。
+各実行にquest_id・quest_version・quest_snapshot・quest_cleared・command_block_indicesを追加保存する。
+元AST・展開命令・マップ・論理判定を受付時に固定し、requestIdの照合にはクエストIDと版も含める。
+questClearedはCOMPLETEDのときだけ返し、停止・エラー・実行中はnull。ブラウザで命令列の予告や条件解決は行わない。
+実行中の強調は、サーバーのcommandBlockIndicesとブラウザの構文順ブロックIDを対応させる。

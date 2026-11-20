@@ -1,8 +1,26 @@
 # ロボット通信プロトコル
 
-Phase 3版。機体との通信仕様はPhase 2から変更なし。HTTP/JSON、登録と旧HeartbeatはprotocolVersion=1、実行制御は2。
+Phase 4・5版。機体との通信仕様はPhase 2から変更なし。HTTP/JSON、登録と旧HeartbeatはprotocolVersion=1、実行制御は2。
 全ロボットAPIに `Authorization: Bearer <個体token>` を付ける。
-運営者APIにはstationToken、参加者APIには発行済みsessionTokenを使う。
+運営者APIにはstationTokenを使う。参加者APIは廃止した。
+
+## 現在の操作：機体へ指示を直接送信
+
+端末は参加者や学習進行を管理しない。運営者のstationTokenで `GET /api/station/status` を確認し、
+`POST /api/robots/{robot_id}/executions` へ機体の指示ASTを送る。参加者・Program・Reservationは不要。
+
+```json
+{"requestId":"42e30ee4-3202-4084-9186-ccfbf38685b2","ast":{"version":1,"commands":[{"type":"MOVE","direction":"FORWARD","steps":1},{"type":"TURN","direction":"LEFT"}]}}
+```
+
+応答はkind=STATION。sessionId・programId・programVersion・reservationIdはnull。
+同じrequestId・機体・ASTの再送は同じ実行を返し、内容や機体が異なる再送は409 IDEMPOTENCY_CONFLICT。
+元のASTはstation_astに保存し、REPEATの展開後の命令と機体のcalibrationを受付時に固定する。
+ASTのサイズ・構造・命令数・時間制限は従来と同じ。
+機体の排他検査と作成はBEGIN IMMEDIATE内で確定する。未完了の実行へ割り込まない。
+状態取得と停止には既存の `/api/executions/{execution_id}` と `/stop` を使う。
+これは端末・機体の運用記録であり、参加者の学習進捗ではない。
+参加者・保存・予約APIは2026年11月21日に廃止した。
 
 ## 登録と旧版互換
 
@@ -44,7 +62,7 @@ Phase 1の `POST /api/robot-agent/heartbeat` はIDLEだけを受ける旧版互�
 `GET /api/test-executions/{execution_id}` が状態・命令位置・時間見積・エラーを返す。
 `POST /api/test-executions/{execution_id}/stop` が停止を要求する。
 QUEUEDは未配信なので即STOPPED、それ以外の進行中はSTOP_REQUESTEDとして停止報告を待つ。
-Phase 3では別の通常実行APIを使う。予約中の機体への試験実行は409 ROBOT_RESERVED。
+通常操作は直接送信APIを使う。実行中の機体への試験実行は409 ROBOT_BUSY。
 
 ## 実行制御と状態報告
 
@@ -113,81 +131,71 @@ SQLiteのトランザクションと機体ごとの未完了実行に対する�
 executionSequenceはDBのAUTOINCREMENTを使い、ESP32は最大消費済み番号をNVSへ出力前に保存する。
 それ以下は再起動後も拒否する。DBの削除・巻き戻し時の扱いは [実機試験手順](phase-2-verification.md) を参照。
 
-`GET /api/health` は認証なしでphase=3の起動情報を返す。
+`GET /api/health` は認証なしでphase=5の起動情報を返す。
 `/docs` と `/openapi.json` から通信型を確認できる。
 
-## Phase 3：参加者・保存・予約
+## ASTの制約・実行履歴・イベント
 
-すべてBearer認証。stationTokenとsessionTokenはSwaggerのAuthorizeで切り替える。
-参加者のsessionIdと、機体の登録で返す通信sessionIdは別の識別子。
-参加者トークンは期限切れ・失効後に401。他の参加者の単体データ取得は404、権限が異なる操作は403。
+REPEATは整数1〜20回、IFと合わせて入れ子3段。構文全体64ノード・展開後64命令まで。ASTのversionは厳密な整数1。
+ASTのJSONはUTF-8で32,000バイトまで。構造は入力時、所要時間は機体が決まる受付時に検証する。
+`GET /api/executions/{execution_id}`、`GET /api/executions`、`POST /api/executions/{execution_id}/stop` はstationTokenが必要。
+一覧はrobot_id、limit、offsetを指定できる。停止と状態遷移は試験実行と共通で、1機体1未完了実行に制限する。
+過去のWORKSHOP実行も履歴として残すが、新規作成用の `POST /api/executions` は撤去した。
+旧sessionId・programId・programVersion・reservationIdはnullを返す。
 
-- stationToken：POST /api/sessions（label）、GET /api/sessions、DELETE /api/sessions/{session_id}。
-  発行応答だけsessionTokenを含む。失効すると未使用予約を失効し、進行中実行へ停止要求する。
-- sessionToken：POST /api/programs、PUT /api/programs/{program_id}。作成はrequestId、更新はexpectedVersionが必須。
-- いずれか：GET /api/programs と /api/programs/{program_id}。参加者は自分の保存だけを取得できる。
-  一覧はlimit（既定25、最大100）とoffsetでページ指定。stationTokenだけsession_idで所有者を指定できる。
+`GET /api/robot-events` はstationTokenが必要。robot_id、execution_id、after_id、limit（既定100、最大500）で絞る。
+eventId昇順で実行状態・命令位置の変化を返す。旧予約イベントは移行時に削除する。
+
+`GET /api/robots` はstationTokenが必要。availabilityはOFFLINE / UNAVAILABLE / IDLE / READY / RUNNING / STOPPING。
+available=trueは接続・制御・走行有効化を満たし、未完了実行がないIDLEのみ。reservationIdはnull。
+READYはQUEUEDまたはDISPATCHED。通信断や停止要求だけでは占有を解放しない。
+一覧取得後にも状態は変わるため、実行受付時に機体の状態と占有を再確認する。
+
+## Phase 4・5の画面からの操作
+
+管理パネルの接続設定にstationTokenを入力する。ブロックで指示を作ってから送信先を選ぶ。
+共通の下書きはsessionStorageへ保持し、サーバーへ保存プログラムや参加者を作成しない。
+画面は機体・AST・requestIdを固定して直接送信する。応答紛失後も同じ要求で結果を照合し、再読込では自動再送しない。
+機体の状態画面では接続・現在の実行とSTOPを表示する。個人別の履歴・課題達成・進捗は扱わない。
+機体へのprotocolVersion=2と停止制御は維持する。
+
+## 開発用のDB閲覧
+
+すべてstationTokenが必要。個体tokenは利用できない。
+
+- `GET /api/station/database`：DBの存在、ファイル名、readOnly=true、許可したテーブルと件数。
+- `GET /api/station/database/{table}?limit=25&offset=0`：列名・型・主キー、最新行、総件数とページ位置。
+  limitは1〜100、offsetは0以上。未知の表は404、読取待ち・時間超過は503 DATABASE_BUSY。
+
+閲覧対象はrobots、executions、robot_events、sqlite_sequence。
+各token_hashは非表示。テキストは先頭4000文字までとし、行詳細はブラウザでJSONを展開表示する。
+ファイルはmode=ro・PRAGMA query_only=ONで開く。更新・削除・任意SQLのエンドポイントは持たない。
+DBがない場合、概要はavailable=falseを返し、内容取得は404 DATABASE_NOT_FOUND。閲覧ではファイルを作成しない。
+
+## クエストと条件分岐
+
+`GET /api/quests`はstationTokenが必要。id・version・titleのみを返し、マップや予測経路は返さない。
+直接送信の本文にquestId・questVersionを指定できる。両方を省略すれば自由走行、IFを使う場合は両方必須。
 
 ```json
 {
-  "requestId": "4a5dfb92-768e-4f5c-a03d-e183412ceb75",
-  "name": "2回くり返す",
-  "blocklyWorkspace": null,
+  "requestId": "a5d4e354-b92b-4e13-b722-eb5884e0e1fd",
+  "questId": "Q01",
+  "questVersion": 1,
   "ast": {"version": 1, "commands": [
-    {"type": "REPEAT", "count": 2, "body": [
-      {"type": "MOVE", "direction": "FORWARD", "steps": 1},
-      {"type": "TURN", "direction": "LEFT"}
-    ]}
+    {"type": "IF", "condition": {"type": "CAN_MOVE_FORWARD"},
+     "body": [{"type": "MOVE", "direction": "FORWARD", "steps": 1}],
+     "elseBody": [{"type": "TURN", "direction": "RIGHT"}]}
   ]}
 }
 ```
 
-応答はprogramId、sessionId、version、expandedCommandCount、createdAt、updatedAtと保存内容。
-REPEATのcountは厳密な整数1〜20、入れ子3段、展開後64命令まで。ASTのversionは厳密な整数1。
-ASTのJSONは32,000バイト、workspaceは200,000バイトまで（UTF-8、保存検証用のJSON表現）。
-通常命令の制限は試験APIと同じ。保存時は構造を検証し、時間上限は機体が決まる実行受付時に検証する。
-更新時はrequestIdを除いてexpectedVersionを指定する。古い版は409 PROGRAM_VERSION_CONFLICT。
-作成再送は同一所有者の同一requestId・内容・version=1なら同じ保存を返す。更新後の作成再送は409。
-
-- stationToken：POST /api/robots/{robot_id}/reservations（requestId、参加者sessionId）。
-- いずれか：GET /api/reservations と /api/reservations/{reservation_id}、DELETEで未使用予約を解放。
-- stationToken：POST /api/reservations/{reservation_id}/renew（所有者sessionId）で未使用予約を延長。
-
-予約応答はreservationId、robotId、sessionId、status、createdAt、expiresAt、executionId、requestId。
-既定60秒、設定reservationTtlSecondsは30〜300秒。再送は同じ予約を返すだけで期限を延長しない。
-RESERVEDだけが失効・解放・更新の対象。IN_USEは終端確認まで保持し、単なる期限経過では解放しない。
-別要求による二重予約は409。期限の失効判定は参照・変更APIのトランザクション内で行う。
-
-## Phase 3：通常実行・履歴・イベント
-
-stationTokenで `POST /api/executions`。プログラム所有者と予約所有者は一致が必要。
-
-```json
-{
-  "requestId": "65a9ca94-475b-436d-abda-187e48f39b27",
-  "programId": "f833a20f-b8d6-4c46-86c4-25ff4bdb3c04",
-  "programVersion": 1,
-  "reservationId": "cc22ad01-124a-4710-b7d0-d276f18730f5"
-}
-```
-
-識別子は保存・予約の実際の応答に置き換える。同じrequestId・プログラムID・版・予約IDの再送は
-期限経過や完了後も同じ実行を返す。内容が異なる再送は409 IDEMPOTENCY_CONFLICT。
-期限切れ予約は409 RESERVATION_EXPIRED、所有者不一致は409 PROGRAM_RESERVATION_MISMATCH。
-時間超過は422、走行無効は403。いずれも実行を作らず、別の機体へ勝手に割り当てない。
-
-通常実行応答は従来の実行状態にkind=WORKSHOP、sessionId、programId、programVersion、reservationId、startedAtを追加。
-commandsとcalibrationは受付時にDBへ固定。機体へはREPEATを含まない従来のprotocolVersion=2を配信する。
-`GET /api/executions/{execution_id}`、`GET /api/executions`、`POST /api/executions/{execution_id}/stop` は
-stationTokenまたは所有者のsessionTokenを使う。一覧はrobot_id、limit、offsetを指定できる。
-停止処理と状態遷移は試験実行と共通。通常・試験を合わせて1機体1未完了実行に制限する。
-
-`GET /api/robot-events` はstationTokenのみ。robot_id、execution_id、after_id、limit（既定100、最大500）で絞る。
-eventIdの昇順で予約・実行状態・命令位置の変化を返す。payloadには状態や理由を含め、秘密トークンは含めない。
-
-`GET /api/robots` は両方のクライアントトークンで利用可能。
-従来のstatusに加えavailability、available、reservationIdを返す。
-availabilityはOFFLINE / UNAVAILABLE / IDLE / RESERVED / READY / RUNNING / STOPPING。
-available=trueは、接続・制御・走行有効化を満たし、予約と未完了実行がないIDLEのみ。
-READYはQUEUEDまたはDISPATCHED。接続が切れた場合は表示をOFFLINEにしても予約占有は保持する。
-一覧表示後に状態が変わる場合があるため、最終的な受付可否は予約・実行APIが再確認する。
+もう一方の条件は`{"type":"ON_CELL","cellType":"GOAL"}`。cellTypeはGOAL・CHECKPOINT・START・PATH。
+前進可否は現在位置から向いている方向の隣接1マスを判定する。PATHはゴール・調査ポイント・開始位置以外の通行可能マス。
+各動作の後に位置・向きを更新し、繰り返し内でも毎回条件を評価する。elseBodyは省略可能。bodyは1命令以上必要。
+移動は後退と途中の各マスも検査し、岩・マップ外に入る場合は422 QUEST_PATH_BLOCKED。実行は作成しない。
+選択結果が0命令なら422 NO_COMMANDS。存在しないクエストは404 QUEST_NOT_FOUND、版不一致は409 QUEST_VERSION_CONFLICT。
+最終位置がゴールならクリア。向き・経由・命令数の最適性はクリア条件に含めない。未達でも送信できる。
+実行応答はquestId・questVersion・questCleared・commandBlockIndicesを追加する。questClearedは完了報告後だけboolean、それ以外はnull。
+消費済み実行の再送は、カタログ変更後も受付時のスナップショットを維持して同じ実行を返す。
+機体へのSTARTは従来のMOVE・TURN・WAITだけで、ファームウェアの更新は不要。

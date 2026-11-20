@@ -1,29 +1,28 @@
 {
   "title": "Blockly Robotics システムマップ",
-  "phase": "Phase 3 · 実機確認済み",
+  "phase": "Phase 4 · 単機実機確認済み / Phase 5 · 複数機実機確認待ち",
   "nodes": [
     {
       "id": "station",
-      "title": "ブラウザ・タブレット",
+      "title": "指示を作ってから機体を選ぶ",
       "kind": "client",
-      "summary": "参加者の保存と運営者の予約・実行を操作する。",
-      "body": "Phase 3の操作入口はFastAPIの /docs。参加者sessionTokenで自分のプログラム保存・履歴・STOP、stationTokenで参加者発行・機体予約・実行開始を行う。Blocklyの編集画面はPhase 4で追加する。",
+      "summary": "固定画面で編集し、送信時だけ機体を選ぶ。",
+      "body": "ヘッダー・指示の自動一覧・下部の説明文を外し、100dvhの全面Blocklyで動きを考える。送信・停止は下端にまとめ、指示を組み終えてから機体を選ぶ。管理は中央モーダルへ集約する。参加者の学習進行は手元のプリントで扱う。",
       "inputs": [
-        "MacBookのLANアドレス:8000/docs",
-        "stationToken（Bearerの値）"
+        "端末のstationToken",
+        "機体ID / 指示AST"
       ],
       "outputs": [
-        "参加者発行 / Program保存",
-        "予約 / 通常実行 / 履歴 / STOP"
+        "直接送信 / 実行状態 / 停止要求"
       ],
       "sources": [
         {
-          "path": "apps/server/app/workshop_api.py",
-          "find": "def workshop_router("
+          "path": "apps/web/src/App.tsx",
+          "find": "function App()"
         },
         {
-          "path": "docs/phase-3-verification.md",
-          "find": "## 予約して実行"
+          "path": "docs/phase-4-verification.md",
+          "find": "## 画面と管理"
         }
       ],
       "facts": [
@@ -42,16 +41,16 @@
       ],
       "flow": [
         {
-          "label": "運営者が参加者を発行",
-          "code": "POST /api/sessions"
+          "label": "指示を作る",
+          "code": "Blockly → AST"
         },
         {
-          "label": "参加者が保存",
-          "code": "POST /api/programs"
+          "label": "内容を固定して機体を選ぶ",
+          "code": "openDestination()"
         },
         {
-          "label": "運営者が予約して開始",
-          "code": "reservations → executions"
+          "label": "機体名を確認して送信",
+          "code": "run(robotId)"
         }
       ]
     },
@@ -60,7 +59,7 @@
       "title": "FastAPI",
       "kind": "server",
       "summary": "認証・JSON検証・処理の入口をまとめる。",
-      "body": "create_app()がWorkshopStoreを組み立て、lifespanで設定とDBを初期化する。workshop_routerが保存・予約・通常実行の入口を追加し、認証と型検証を通してStoreへ渡す。機体の登録・制御プロトコルはPhase 2と共通。",
+      "body": "create_appがWorkshopStoreを組み立て、lifespanで設定とDBを初期化する。workshop_routerが直接送信・実行履歴・STOP・イベント・DB閲覧を提供する。機体の登録・制御通信はPhase 2と共通。ビルドがあればmount_webで画面も配信する。",
       "inputs": [
         "HTTPリクエスト",
         "WorkshopConfig / WorkshopStore"
@@ -177,14 +176,14 @@
       "id": "store",
       "title": "WorkshopStore / SQLite",
       "kind": "data",
-      "summary": "保存・予約・実行を同じSQLiteで管理する。",
-      "body": "Storeが個体と接続、ExecutionStoreが共通の実行とSTOP、WorkshopStoreが参加者・保存・予約・通常実行を担当する。BEGIN IMMEDIATEで照合と更新を同じトランザクションにし、所有者・版・占有を一括で確定する。",
+      "summary": "機体と実行をSQLiteで管理する。",
+      "body": "WorkshopStoreは直接送信・一覧・履歴を扱う。ExecutionStoreが採番・命令・calibration・STOPを管理し、Storeが個体と接続を保持する。旧参加者・保存・予約はバックアップ後に廃止する。",
       "inputs": [
         "設定と個体の報告",
         "試験命令・requestId・停止要求"
       ],
       "outputs": [
-        "robots / programs / reservations / executions",
+        "robots / executions / robot_events / sqlite_sequence",
         "認証結果 / 受付と状態 / イベント"
       ],
       "sources": [
@@ -211,7 +210,7 @@
           "code": "ExecutionStore"
         },
         {
-          "label": "参加者・保存・予約",
+          "label": "直接送信・履歴・一覧",
           "code": "WorkshopStore"
         }
       ]
@@ -221,7 +220,7 @@
       "title": "SQLite / robots",
       "kind": "data",
       "summary": "個体設定と接続状態を1個体1行で保持する。",
-      "body": "robotsは個体ID、認証ハッシュ、接続、走行有効化、calibration、制御時刻を保持する。statusはlast_seenから算出する。参加者・プログラム・予約・共通実行・イベントも同じSQLite内の別表へ保存する。",
+      "body": "robotsは個体ID、認証ハッシュ、接続、走行有効化、calibration、制御時刻を保持する。実行とイベントはexecutions・robot_eventsへ、採番最高値はsqlite_sequenceへ保存する。旧3テーブルは廃止した。",
       "inputs": [
         "StoreからのSQL"
       ],
@@ -325,15 +324,15 @@
     },
     {
       "id": "future",
-      "title": "Blockly UI・3台運用",
+      "title": "教育用コンテンツ",
       "kind": "planned",
-      "summary": "Phase 4以降で画面と教室運用を追加する。",
-      "body": "Phase 3までの保存・REPEAT展開・予約・通常実行は実装済み。Phase 4でReact / Blockly UI、Phase 5で3台の実環境運用、Phase 6で教材を整える。現在の操作入口はSwagger。",
+      "summary": "Phase 6で課題と教材を整える。",
+      "body": "Phase 4のBlocklyとPhase 5の複数機体管理は実装済み。2026年11月21日に利用者が画面からの単機実行を確認した。模擬3台で検証済みだが、実機2・3台目は製作待ちで複数機の走行確認は保留。Phase 6で課題と教材を整える。",
       "inputs": [
-        "設計仕様書のPhase 4〜6"
+        "設計仕様書のPhase 6"
       ],
       "outputs": [
-        "これから実装する機能"
+        "課題 / 教材"
       ],
       "sources": [
         {
@@ -344,15 +343,11 @@
       "status": "planned",
       "flow": [
         {
-          "label": "編集と実行の画面",
-          "code": "Phase 4 / React・Blockly"
+          "label": "動作確認を積む",
+          "code": "Phase 4 単機確認済み / Phase 5 複数機確認待ち"
         },
         {
-          "label": "教室の同時運用",
-          "code": "Phase 5 / 3台"
-        },
-        {
-          "label": "教育用コンテンツ",
+          "label": "学習用の課題へ",
           "code": "Phase 6"
         }
       ]
@@ -361,8 +356,8 @@
       "id": "server-config",
       "title": "サーバーの個体設定",
       "kind": "config",
-      "summary": "個体・走行調整・予約と参加者の期限を決める。",
-      "body": "load_config()が個体の資格情報・motionEnabled・calibrationと、予約TTL・参加者TTLを検証する。期限は省略時60秒・8時間。既存の秘密設定と走行調整値は保持する。サーバー再起動で反映し、受付済み実行のcalibrationは固定される。",
+      "summary": "個体・認証・走行の調整を設定する。",
+      "body": "load_configが個体の資格情報・motionEnabled・calibrationを検証する。旧予約TTL・参加者TTLは既存ファイルの読込用に受け付けるだけで運用には使わない。秘密設定と走行調整値は維持する。再起動で反映し、受付済み実行のcalibrationは固定する。",
       "inputs": [
         "WORKSHOP_CONFIG または config/local.json"
       ],
@@ -405,12 +400,8 @@
           "JSON編集後にサーバー再起動。旧実行は停止確認へ"
         ],
         [
-          "reservationTtlSeconds",
-          "30〜300秒。既定60秒、RESERVEDだけに適用"
-        ],
-        [
-          "participantSessionTtlSeconds",
-          "300〜86400秒。既定28800秒"
+          "旧TTLキー",
+          "既存ファイル読込用。現在の動作には不使用"
         ]
       ],
       "flow": [
@@ -565,7 +556,7 @@
       "title": "サーバー起動",
       "kind": "server",
       "summary": "設定・DBを初期化してHTTPを受ける。",
-      "body": "Uvicornがapp.main:appを読み、lifespanでWorkshopStoreを初期化する。Phase 2の実行表をexecutionsへ名前変更し、履歴と採番の最高値を保持する。旧通信セッションを無効にし、進行中実行はSTOP_REQUESTEDへ移す。参加者・保存・予約は保持する。",
+      "body": "Uvicornがアプリを読み、lifespanでWorkshopStoreを初期化する。旧参加者・保存・予約表は全実行の終端確認とバックアップ後に削除する。実行履歴と採番最高値を保持する。通常の再起動は旧通信セッションを無効にし、未完了実行をSTOP_REQUESTEDへ移す。",
       "inputs": [
         "uv run --locked uvicorn app.main:app --host 0.0.0.0 --port 8000"
       ],
@@ -616,7 +607,7 @@
       "title": "DBの起動時同期",
       "kind": "data",
       "summary": "履歴と採番を引き継ぎ、停止待ちを保持する。",
-      "body": "Store → ExecutionStore → WorkshopStoreの順に表と索引を初期化する。旧test_executionsの名前変更でsqlite_sequenceの最高値も維持する。両方の実行表が存在する不整合は起動を拒否する。実行中予約は停止確認まで占有を保持する。",
+      "body": "旧参加者・保存・予約表があれば全実行の終端を確認し、data/backupsへ退避して削除する。旧参照と旧予約イベントも除去する。実行履歴と採番を維持し、以降は旧表を再作成しない。通常の再起動は接続を無効化し、未完了の占有をSTOP_REQUESTEDで保持する。",
       "inputs": [
         "WorkshopConfig",
         "既存DB"
@@ -633,6 +624,10 @@
         {
           "path": "apps/server/app/workshop.py",
           "find": "def initialize("
+        },
+        {
+          "path": "apps/server/app/storage_migration.py",
+          "find": "def retire_participant_storage("
         }
       ],
       "facts": [
@@ -719,8 +714,8 @@
       "id": "auth",
       "title": "個体・ステーション認証",
       "kind": "server",
-      "summary": "個体・運営者・参加者の権限を分ける。",
-      "body": "require_robot()は個体のトークンを照合する。require_station()は発行・予約・実行開始を運営者に限定する。require_client()はstationTokenまたは有効な参加者sessionTokenを受け付ける。参加者の保存・履歴・STOPは自分のデータだけ。DBへはトークンのSHA-256を保存する。",
+      "summary": "機体と運営者の権限を分ける。",
+      "body": "端末のstationTokenで一覧・直接送信・履歴・STOP・DB閲覧を認証する。機体は個体tokenで認証する。参加者トークンの発行・認証は廃止した。",
       "inputs": [
         "Authorization: Bearer <token>"
       ],
@@ -730,15 +725,11 @@
       "sources": [
         {
           "path": "apps/server/app/main.py",
-          "find": "def require_client("
+          "find": "def require_robot("
         },
         {
           "path": "apps/server/app/main.py",
           "find": "def require_station("
-        },
-        {
-          "path": "apps/server/app/workshop.py",
-          "find": "def authenticate_session("
         }
       ],
       "facts": [
@@ -761,12 +752,8 @@
           "code": "robot token → robotId"
         },
         {
-          "label": "機体予約・実行開始",
+          "label": "直接送信・履歴・管理",
           "code": "stationToken → STATION"
-        },
-        {
-          "label": "自分の保存とSTOP",
-          "code": "sessionToken → PARTICIPANT"
         }
       ]
     },
@@ -775,7 +762,7 @@
       "title": "JSONメッセージ検証",
       "kind": "server",
       "summary": "HTTPと内部の名前・型を対応させる。",
-      "body": "MessageはcamelCaseとsnake_caseを対応させ、未知フィールドを拒否する。execution_models.pyが機体命令と制御通信、workshop_models.pyが参加者・Program AST・予約・通常実行を検証する。ASTのREPEATを展開して既存のMOVE・TURN・WAITへ変換する。",
+      "body": "MessageはcamelCaseとsnake_caseを対応させ、未知フィールドを拒否する。execution_modelsは機体命令と制御通信、workshop_modelsは直接送信のASTと実行履歴を検証する。REPEATを展開しMOVE・TURN・WAITへ変換する。",
       "inputs": [
         "RegisterRequest / HeartbeatRequest"
       ],
@@ -1052,7 +1039,7 @@
       "title": "IDLE / OFFLINEの算出",
       "kind": "data",
       "summary": "最後の正常通信から3秒が境界になる。",
-      "body": "statusは直近3秒未満の正常通信ならIDLE、それ以外はOFFLINE。availabilityは制御通信・走行有効化・予約・実行から算出し、空いている時だけavailable=trueとする。OFFLINEでも占有を解放しない。画面表示後の競合は受付トランザクションで再確認する。",
+      "body": "statusは直近3秒未満の正常通信ならIDLE、それ以外はOFFLINE。availabilityは制御通信・走行有効化・未完了実行から算出し、空いている時だけavailable=trueとする。通信断でも占有は保持する。受付時に状態を再確認する。",
       "inputs": [
         "now / last_seen / enabled"
       ],
@@ -1076,11 +1063,11 @@
         ],
         [
           "availability",
-          "IDLE / RESERVED / READY / RUNNING / STOPPING / OFFLINE / UNAVAILABLE"
+          "IDLE / READY / RUNNING / STOPPING / OFFLINE / UNAVAILABLE"
         ],
         [
           "available",
-          "IDLEかつ予約・実行なしの場合だけtrue"
+          "IDLEかつ未完了実行なしの場合だけtrue"
         ]
       ],
       "flow": [
@@ -1169,13 +1156,13 @@
       "id": "tests",
       "title": "API・実行エンジン試験",
       "kind": "test",
-      "summary": "所有者・競合・移行と機体の通信契約を検証する。",
-      "body": "隔離SQLiteと時計で保存・同時編集・予約・排他・期限・所有者・再起動・Phase 2移行を検証する。ホスト試験は実機C++とAPIの通信契約も確認する。Phase 3は2026年11月20日に利用者が予約から実行完了までの実機確認を完了。全異常系の実機実施や停止遅延の定量測定を示すものではない。",
+      "summary": "直接送信・排他・移行・機体の通信契約を検証する。",
+      "body": "隔離SQLiteと時計で直接送信、同一要求の再照合、機体の排他と停止、断線と再起動、AST制約を検証する。DB整理ではバックアップ・旧表除去・採番維持・冪等性と進行中の移行拒否を確認する。DB閲覧は認証・ハッシュ非表示・ページング・SQL拒否を確認する。 2026年11月21日に利用者から画面での単機実行確認完了の報告を受けた。複数機の実機確認と項目別測定値は未記録。",
       "inputs": [
         "pytest / tmp_path / 注入したclock"
       ],
       "outputs": [
-        "17件のAPI試験"
+        "サーバー・画面・C++の検証結果"
       ],
       "sources": [
         {
@@ -1189,20 +1176,44 @@
         {
           "path": "docs/phase-3-verification.md",
           "find": "## 追加の確認"
+        },
+        {
+          "path": "apps/server/tests/test_fleet.py",
+          "find": "def test_three_robots"
+        },
+        {
+          "path": "apps/web/tests/blocks.test.ts",
+          "find": "Blocklyと実行ASTの契約"
+        },
+        {
+          "path": "apps/server/tests/test_station.py",
+          "find": "def test_direct_dispatch"
+        },
+        {
+          "path": "apps/server/tests/test_inspection.py",
+          "find": "def test_database_browser"
+        },
+        {
+          "path": "apps/server/tests/test_storage_migration.py",
+          "find": "def test_retirement_backs_up"
+        },
+        {
+          "path": "apps/server/tests/test_quests.py",
+          "find": "def test_if_is_resolved"
         }
       ],
       "facts": [
         [
-          "API",
-          "87件：接続・実行・保存・予約・権限・競合・DB移行"
+          "サーバー",
+          "95件：直接送信・接続・排他・移行・DB閲覧・クエストとIF"
         ],
         [
-          "機体コード",
-          "ホストC++試験と双方向のJSON契約試験"
+          "画面",
+          "10件：AST・IF両分岐の復元・送信先とクエストの固定・HTTP向けUUID"
         ],
         [
-          "実機",
-          "Phase 1〜3は利用者確認済み。Phase 3は予約から通常実行完了までを確認"
+          "ブラウザ",
+          "1280×720 / 768×1024 / 1024×768でページ寸法と操作位置を確認"
         ]
       ],
       "flow": [
@@ -1327,7 +1338,7 @@
       "title": "試験実行とSTOP",
       "kind": "server",
       "summary": "運営者の命令を受付し、停止を要求する。",
-      "body": "運営者の試験APIは既存のまま使えるが、予約のある機体へは割り込めない。通常実行と共通のexecutions表と排他制御を使い、受付時にcalibrationを固定する。STOPは未配信なら取消し、配信後は停止報告を待つ。",
+      "body": "運営者の試験APIは直接送信と共通の実行表・排他制御を使う。受付時に命令とcalibrationを固定する。STOPは未配信なら取消し、配信後は停止報告を待つ。",
       "inputs": [
         "stationToken",
         "requestId / MOVE・TURN・WAIT"
@@ -1384,7 +1395,7 @@
       "title": "SQLite / executions",
       "kind": "data",
       "summary": "試験・通常実行の命令と状態を共通保存する。",
-      "body": "kind=TEST / WORKSHOPを同じ表で管理する。execution_sequenceはAUTOINCREMENT、未完了実行に機体単位の部分一意索引を置く。通常実行は参加者・保存版・予約も記録し、命令列とcalibrationを固定する。旧表からの移行で採番を引き継ぐ。",
+      "body": "kind=STATIONは機体への直接送信。元のAST・展開命令・calibrationを受付時に固定する。実行履歴とrequestIdは再送の照合、採番最高値はESP32の消費済み番号と整合するために保持する。過去のWORKSHOP実行も残し、旧個人・プログラム・予約への参照はnullにする。未完了は機体ごとに1件。 quest_id・quest_version・quest_snapshot・quest_cleared・command_block_indicesも固定し、マップ変更や再送で内容を変更しない。",
       "inputs": [
         "試験APIと制御通信"
       ],
@@ -1728,106 +1739,11 @@
       ]
     },
     {
-      "id": "participant",
-      "title": "参加者セッション",
-      "kind": "server",
-      "summary": "運営者が期限付きトークンを発行する。",
-      "body": "sessionTokenは発行応答に1度だけ含め、DBへはSHA-256のみ保存する。既定8時間で失効。明示的な失効では未使用予約を失効し、配信済みの実行へ停止を要求する。参加者のsessionIdは機体通信のsessionIdとは別。",
-      "inputs": [
-        "stationToken / label"
-      ],
-      "outputs": [
-        "sessionId / sessionToken / expiresAt"
-      ],
-      "sources": [
-        {
-          "path": "apps/server/app/workshop.py",
-          "find": "def issue_session("
-        },
-        {
-          "path": "apps/server/app/workshop.py",
-          "find": "def revoke_session("
-        }
-      ],
-      "flow": [
-        {
-          "label": "運営者が発行",
-          "code": "POST /api/sessions"
-        },
-        {
-          "label": "参加者として操作",
-          "code": "Bearer sessionToken"
-        },
-        {
-          "label": "失効と停止要求",
-          "code": "DELETE /api/sessions/{id}"
-        }
-      ],
-      "facts": [
-        [
-          "個体通信",
-          "robot tokenで別認証"
-        ],
-        [
-          "自然失効",
-          "新しい操作を拒否。受付済み実行は機体の許可期限で管理"
-        ]
-      ]
-    },
-    {
-      "id": "program",
-      "title": "Programの保存・版",
-      "kind": "data",
-      "summary": "workspaceとASTを参加者ごとに保存する。",
-      "body": "作成は所有者とrequestIdで重複を防ぐ。更新はexpectedVersionが一致した場合だけversionを進める。参加者は自分の保存だけを取得・更新でき、同時編集は409になる。Blockly workspaceは保管し、実行はASTのみを使う。",
-      "inputs": [
-        "sessionToken / name / ast",
-        "blocklyWorkspace / expectedVersion"
-      ],
-      "outputs": [
-        "programId / version / expandedCommandCount"
-      ],
-      "sources": [
-        {
-          "path": "apps/server/app/workshop.py",
-          "find": "def create_program("
-        },
-        {
-          "path": "apps/server/app/workshop.py",
-          "find": "def update_program("
-        }
-      ],
-      "flow": [
-        {
-          "label": "新規保存",
-          "code": "POST /api/programs"
-        },
-        {
-          "label": "競合を照合",
-          "code": "expectedVersion == version"
-        },
-        {
-          "label": "次の版を保存",
-          "code": "PUT /api/programs/{id}"
-        }
-      ],
-      "facts": [
-        [
-          "workspace",
-          "200kBまで。UIの実装はPhase 4"
-        ],
-        [
-          "所有者",
-          "参加者本人。運営者は閲覧可能"
-        ]
-      ]
-    },
-    {
       "id": "ast",
       "title": "AST・REPEATの展開",
       "kind": "server",
       "summary": "構造を検証し、最大64命令へ展開する。",
-      "body": "AST version=1のMOVE・TURN・WAITとREPEATだけを受け付ける。REPEATの回数と深さ、JSONサイズ、展開後の個数を保存時に検証する。機体のcalibrationで実行時間を計算するのは通常実行の受付時。",
+      "body": "AST version=1はMOVE・TURN・WAIT・REPEAT・IFを持つ。IFは前進可否または現在マスの種類を判定する。構文64ノード・32kB、IFとREPEATは合計3段まで。サーバーで解決した後も64命令の上限を適用する。",
       "inputs": [
         "ProgramAst version=1"
       ],
@@ -1874,119 +1790,11 @@
       ]
     },
     {
-      "id": "reservation",
-      "title": "機体の予約・期限",
-      "kind": "data",
-      "summary": "未使用予約だけを失効し、実行中は保持する。",
-      "body": "stationTokenで参加者の機体を予約する。RESERVEDは既定60秒で失効し、明示更新で延長できる。IN_USEは期限経過でも解放しない。試験APIも含めて割り込みを拒否する。期限判定と占有の照合はAPIのトランザクション内で行う。",
-      "inputs": [
-        "stationToken / robotId / sessionId",
-        "requestId"
-      ],
-      "outputs": [
-        "reservationId / expiresAt / status"
-      ],
-      "sources": [
-        {
-          "path": "apps/server/app/workshop.py",
-          "find": "def reserve("
-        },
-        {
-          "path": "apps/server/app/workshop.py",
-          "find": "def _expire_reservations("
-        },
-        {
-          "path": "apps/server/app/workshop.py",
-          "find": "def renew_reservation("
-        }
-      ],
-      "flow": [
-        {
-          "label": "未使用で占有",
-          "code": "RESERVED"
-        },
-        {
-          "label": "実行受付と同時に変更",
-          "code": "IN_USE"
-        },
-        {
-          "label": "終端確定で解放",
-          "code": "FINISHED"
-        }
-      ],
-      "facts": [
-        [
-          "更新",
-          "RESERVEDのみ。再送は期限延長しない"
-        ],
-        [
-          "解放",
-          "RELEASED / EXPIRED、実行中はSTOPが必要"
-        ],
-        [
-          "時計",
-          "TTL 30〜300秒、既定60秒"
-        ]
-      ]
-    },
-    {
-      "id": "workshop-execution",
-      "title": "保存プログラムを実行",
-      "kind": "server",
-      "summary": "所有者・版・予約・機体を一括で照合する。",
-      "body": "stationTokenで通常実行を開始する。プログラムと予約の所有者が一致し、版と期限と機体の準備が有効なら、展開済み命令とcalibrationを共通実行表へ固定し、予約をIN_USEにする。同一requestIdの再送は同じ実行を返す。",
-      "inputs": [
-        "programId / programVersion",
-        "reservationId / requestId"
-      ],
-      "outputs": [
-        "executionId / executionSequence / QUEUED"
-      ],
-      "sources": [
-        {
-          "path": "apps/server/app/workshop.py",
-          "find": "def create_execution("
-        },
-        {
-          "path": "apps/server/app/executions.py",
-          "find": "def _insert_execution("
-        }
-      ],
-      "flow": [
-        {
-          "label": "所有者・版・期限・空きを照合",
-          "code": "BEGIN IMMEDIATE"
-        },
-        {
-          "label": "命令と調整値を固定",
-          "code": "INSERT executions"
-        },
-        {
-          "label": "実行と占有を同時確定",
-          "code": "reservation → IN_USE"
-        }
-      ],
-      "facts": [
-        [
-          "版の不一致",
-          "409 PROGRAM_VERSION_CONFLICT"
-        ],
-        [
-          "所有者不一致",
-          "409 PROGRAM_RESERVATION_MISMATCH"
-        ],
-        [
-          "時間上限",
-          "422。予約は未使用のまま"
-        ]
-      ]
-    },
-    {
       "id": "history",
-      "title": "履歴・所有者のSTOP",
+      "title": "履歴・実行のSTOP",
       "kind": "server",
-      "summary": "参加者は自分の実行だけを確認・停止する。",
-      "body": "GET一覧・単体取得・STOPは参加者本人または運営者が行う。QUEUEDは即取消し、配信後はSTOP_REQUESTEDで機体の終端報告を待つ。停止要求だけでは占有を解放しない。再起動後も同じ条件で保持する。",
+      "summary": "運営者が実行を確認・停止する。",
+      "body": "stationTokenで一覧・単体取得・STOPを認証する。QUEUEDは即取消し、配信後はSTOP_REQUESTEDで終端報告を待つ。停止要求だけでは占有を解放しない。",
       "inputs": [
         "sessionToken または stationToken",
         "executionId"
@@ -2020,12 +1828,12 @@
       ],
       "facts": [
         [
-          "他の参加者",
-          "単体GET / STOPは404"
+          "認証",
+          "stationToken"
         ],
         [
-          "期限・再起動",
-          "IN_USEは停止・完了確認まで維持"
+          "占有",
+          "停止報告まで保持"
         ]
       ]
     },
@@ -2033,10 +1841,10 @@
       "id": "events",
       "title": "状態イベント",
       "kind": "data",
-      "summary": "予約と実行の変化を時系列で保存する。",
-      "body": "予約の作成・更新・失効・占有・解放と、実行状態・命令位置の変化をrobot_eventsへ記録する。stationTokenでafter_id以降を取得できる。入力の秘密トークンは保存しない。機体の現在状態は一覧APIを使う。",
+      "summary": "実行の変化を時系列で保存する。",
+      "body": "実行状態と命令位置の変化をrobot_eventsへ記録する。旧予約イベントは整理時に除去する。stationTokenでafter_id以降を取得できる。秘密トークンは保存しない。機体の現在状態は一覧APIを使う。",
       "inputs": [
-        "予約 / 実行状態の変化"
+        "実行状態・命令位置の変化"
       ],
       "outputs": [
         "eventId / eventType / payload"
@@ -2077,6 +1885,665 @@
         [
           "件数",
           "既定100、最大500"
+        ]
+      ]
+    },
+    {
+      "id": "blockly",
+      "title": "日本語のブロック編集",
+      "kind": "client",
+      "summary": "独自ブロックをつなげ、保存・復元する。",
+      "body": "EditorがBlocklyの生成・破棄・サイズ変更を管理する。初期倍率は0.95÷1.2（約79%）。拡大・縮小はzoomCenter、中央ボタンはscrollCenterで倍率を維持してブロックを中央表示する。 接続や繰り返しのサポート文は出さず、構造の検証と不正な指示の送信制限は維持する。スクロールバーはタッチ端末も12px幅（ハンドル7px）に統一する。 応用ブロックにIFを追加し、前進可否とマスの種類を選べる。両分岐をASTへ保存し、ブラウザでは解決しない。",
+      "sources": [
+        {
+          "path": "apps/web/src/Editor.tsx",
+          "find": "export function Editor("
+        },
+        {
+          "path": "apps/web/src/blocks.ts",
+          "find": "defineBlocksWithJsonArray"
+        }
+      ],
+      "inputs": [
+        "Blockly workspace / 基本・応用ツールボックス"
+      ],
+      "outputs": [
+        "workspace JSON / AST / ブロックID"
+      ],
+      "flow": [
+        {
+          "label": "編集領域を生成",
+          "code": "Blockly.inject()"
+        },
+        {
+          "label": "状態を保存",
+          "code": "serialization.workspaces.save()"
+        },
+        {
+          "label": "保存状態を復元",
+          "code": "serialization.workspaces.load()"
+        }
+      ],
+      "facts": [
+        [
+          "命令",
+          "まえ・うしろ・左右・待機・くりかえし"
+        ],
+        [
+          "画像素材",
+          "npmからローカルへコピー。CDN不要"
+        ],
+        [
+          "中央表示",
+          "倍率を変更しない"
+        ]
+      ]
+    },
+    {
+      "id": "browser-ast",
+      "title": "画面のAST変換・検証",
+      "kind": "client",
+      "summary": "切り離しや不正な繰り返しを送信しない。",
+      "body": "はじめるが1つで全ブロックが接続されていることを確認する。対応型だけをASTに変換し、REPEATの深さ3段・展開64命令までを検証する。展開後の位置にブロックIDを対応させる。任意JavaScriptは生成しない。",
+      "sources": [
+        {
+          "path": "apps/web/src/blocks.ts",
+          "find": "export function compile("
+        },
+        {
+          "path": "apps/web/src/blocks.ts",
+          "find": "export function validateAst("
+        }
+      ],
+      "inputs": [
+        "接続済みのブロック"
+      ],
+      "outputs": [
+        "version=1 AST / 展開ブロックID"
+      ],
+      "flow": [
+        {
+          "label": "単一の開始点を検証",
+          "code": "getTopBlocks()"
+        },
+        {
+          "label": "独自ブロックを変換",
+          "code": "MOVE / TURN / WAIT / REPEAT"
+        },
+        {
+          "label": "上限を検証",
+          "code": "validateAst()"
+        }
+      ],
+      "facts": [
+        [
+          "機体別の実行時間",
+          "サーバーで最終検証"
+        ],
+        [
+          "ASTだけの旧保存",
+          "workspaceFromAst()でブロックへ復元"
+        ]
+      ]
+    },
+    {
+      "id": "browser-save",
+      "title": "機体に属さない共通下書き",
+      "kind": "client",
+      "summary": "編集と送信先を分け、作成中の指示を保持する。",
+      "body": "作成中のworkspaceをworkspaceDraftとしてsessionStorageへ保持する。編集時に機体を選ばない。旧機体別下書きがある場合、最後に編集していたものを初回候補として引き継ぐ。送信要求は下書きと別に固定し、送信後の編集で実行内容を変えない。",
+      "sources": [
+        {
+          "path": "apps/web/src/App.tsx",
+          "find": "function initialWorkspace()"
+        },
+        {
+          "path": "apps/web/src/App.tsx",
+          "find": "const updateDraft ="
+        }
+      ],
+      "inputs": [
+        "Blockly workspace"
+      ],
+      "outputs": [
+        "共通下書き / 編集復元"
+      ],
+      "flow": [
+        {
+          "label": "機体を決めずに作成",
+          "code": "Editor"
+        },
+        {
+          "label": "共通の下書きを保持",
+          "code": "workspaceDraft"
+        },
+        {
+          "label": "送信は別の固定要求",
+          "code": "InstructionSnapshot / SendIntent"
+        }
+      ],
+      "facts": [
+        [
+          "保存場所",
+          "このタブのsessionStorage"
+        ],
+        [
+          "送信先",
+          "指示作成後のダイアログで選択"
+        ],
+        [
+          "学習の進行",
+          "参加者の手元のプリント"
+        ]
+      ]
+    },
+    {
+      "id": "browser-run",
+      "title": "指示固定・機体選択・送信",
+      "kind": "client",
+      "summary": "作成後に送信先を指定し、応答紛失でも二重実行しない。",
+      "body": "openDestination()が指示を固定して機体選択を開く。機体は自動選択せず、選択だけでは実行を作らない。機体名付きボタンで固定ASTとrequestIdを送る。未確認の送信は管理パネルから同じ要求で再確認する。再読込では自動走行しない。 送信モーダルでクエストを任意選択し、IF使用時は選択必須。予測経路を表示せず、完了後にサーバーのクリア判定を表示する。",
+      "sources": [
+        {
+          "path": "apps/web/src/station.ts",
+          "find": "export function captureInstructions("
+        },
+        {
+          "path": "apps/web/src/App.tsx",
+          "find": "const openDestination ="
+        },
+        {
+          "path": "apps/web/src/station.ts",
+          "find": "export async function sendInstructions("
+        }
+      ],
+      "inputs": [
+        "robotId / AST / requestId"
+      ],
+      "outputs": [
+        "executionId / 受付と完了 / STOP"
+      ],
+      "flow": [
+        {
+          "label": "先に指示だけを固定",
+          "code": "captureInstructions()"
+        },
+        {
+          "label": "後から機体を指定",
+          "code": "destination-panel"
+        },
+        {
+          "label": "明示操作で送信",
+          "code": "prepareSend() / sendInstructions()"
+        }
+      ],
+      "facts": [
+        [
+          "固定画面",
+          "PC・縦横タブレットでページ全体をスクロールしない"
+        ],
+        [
+          "選択だけでは送らない",
+          "機体名付きボタンで初めてPOST"
+        ],
+        [
+          "再確認",
+          "管理内の未確認要求を同じIDで照合"
+        ]
+      ]
+    },
+    {
+      "id": "web-build",
+      "title": "Vite・同一オリジン配信",
+      "kind": "config",
+      "summary": "開発はproxy、本番はFastAPIから配信する。",
+      "body": "npm ciで依存を再現し、buildでapps/web/distを生成する。開発用ViteはROBOT_API_URLへ/apiをproxyする。FastAPIはAPIとSwaggerを優先し、ビルドがある時だけルートへ静的配信を追加する。",
+      "sources": [
+        {
+          "path": "apps/web/vite.config.ts",
+          "find": "proxy:"
+        },
+        {
+          "path": "apps/server/app/web.py",
+          "find": "def mount_web("
+        },
+        {
+          "path": "apps/web/scripts/copy-media.mjs",
+          "find": "cpSync"
+        }
+      ],
+      "inputs": [
+        "package-lock.json / ソース / Blockly media"
+      ],
+      "outputs": [
+        "apps/web/dist / 同一オリジンのUIとAPI"
+      ],
+      "flow": [
+        {
+          "label": "依存を固定して導入",
+          "code": "npm ci"
+        },
+        {
+          "label": "ビルド",
+          "code": "npm run build"
+        },
+        {
+          "label": "APIを再起動して配信",
+          "code": "StaticFiles / WORKSHOP_WEB_DIST"
+        }
+      ],
+      "facts": [
+        [
+          "開発",
+          "5173番。API接続先を明示"
+        ],
+        [
+          "教室",
+          "MacのLANアドレス:8000/"
+        ],
+        [
+          "秘密設定",
+          "VITE_変数や成果物へtokenを埋め込まない"
+        ]
+      ]
+    },
+    {
+      "id": "fleet-admin",
+      "title": "統合管理パネル",
+      "kind": "client",
+      "summary": "機体の状態・接続設定・DB確認をひとつにまとめる。",
+      "body": "通常の編集画面から小さな歯車から中央モーダルを開く。機体の状態、端末の接続設定、開発用DB確認をタブで切り替える。状態タブは個別と全台へのSTOP、未確認要求の再照合を提供する。参加者の学習進捗は扱わない。 Escape・背景クリックでも閉じられ、フォーカスを元の操作へ戻す。",
+      "sources": [
+        {
+          "path": "apps/web/src/ManagementPanel.tsx",
+          "find": "export function ManagementPanel("
+        },
+        {
+          "path": "apps/web/src/App.tsx",
+          "find": "const halt ="
+        }
+      ],
+      "inputs": [
+        "stationToken / robots / 未確認要求"
+      ],
+      "outputs": [
+        "状態 / 接続操作 / DB閲覧 / STOP"
+      ],
+      "flow": [
+        {
+          "label": "状態と停止",
+          "code": "robots"
+        },
+        {
+          "label": "端末を接続",
+          "code": "connection"
+        },
+        {
+          "label": "DBを読み取り確認",
+          "code": "database"
+        }
+      ],
+      "facts": [
+        [
+          "通常画面",
+          "編集と送信に集中し、管理パネルは閉じておく"
+        ],
+        [
+          "認証",
+          "DB閲覧を含む管理APIはstationTokenが必要"
+        ]
+      ]
+    },
+    {
+      "id": "fleet-config",
+      "title": "3台分の個体設定",
+      "kind": "config",
+      "summary": "ID・資格情報・走行調整を個体ごとに分ける。",
+      "body": "local.example.jsonはrobot-01〜03の雛形。既存のlocal.jsonは上書きせず追記する。各ESP32のROBOT_IDとROBOT_TOKENを一致させ、個体別calibrationを調整する。共通のプロトコルとファームウェアを利用する。",
+      "sources": [
+        {
+          "path": "config/local.example.json",
+          "find": "\"robot-03\""
+        },
+        {
+          "path": "docs/phase-5-verification.md",
+          "find": "## 個体ごとの準備"
+        }
+      ],
+      "inputs": [
+        "個体別ID・token・calibration"
+      ],
+      "outputs": [
+        "Robot A / B / C"
+      ],
+      "flow": [
+        {
+          "label": "別々の個体を登録",
+          "code": "robots[]"
+        },
+        {
+          "label": "個体へ設定を反映",
+          "code": "robot_config.h"
+        },
+        {
+          "label": "1台ずつ走行を確認",
+          "code": "motionEnabled"
+        }
+      ],
+      "facts": [
+        [
+          "設定雛形",
+          "走行は既定無効"
+        ],
+        [
+          "実機3台",
+          "実機での独立走行確認は未実施"
+        ]
+      ]
+    },
+    {
+      "id": "fleet-simulation",
+      "title": "実機と分離した模擬3台",
+      "kind": "test",
+      "summary": "専用IDとDBで通信・画面を検証する。",
+      "body": "sim-ID・simulation-only-tokenだけを受け付ける検証専用エージェント。命令時間と許可・STOP・ACKを模擬するが、GPIO出力や実機NVSは持たない。検証APIは8003番、実機用DB・設定と分離する。",
+      "sources": [
+        {
+          "path": "scripts/simulate_robots.py",
+          "find": "def simulate("
+        },
+        {
+          "path": "config/simulation.example.json",
+          "find": "\"sim-robot-01\""
+        }
+      ],
+      "inputs": [
+        "simulation.example.json / 検証用DB"
+      ],
+      "outputs": [
+        "SIMULATION-no-motors / 制御報告"
+      ],
+      "flow": [
+        {
+          "label": "模擬専用API",
+          "code": "WORKSHOP_DB / 8003"
+        },
+        {
+          "label": "模擬機体を起動",
+          "code": "simulate_robots.py"
+        },
+        {
+          "label": "画面から試す",
+          "code": "機体選択 → 指示送信 → STOP"
+        }
+      ],
+      "facts": [
+        [
+          "個体別起動",
+          "--robot sim-robot-01"
+        ],
+        [
+          "制限",
+          "実機の電源・配線・負荷試験の代替ではない"
+        ]
+      ]
+    },
+    {
+      "id": "fleet-test",
+      "title": "3台の独立性を検証",
+      "kind": "test",
+      "summary": "同時配信・個別停止・断線・再起動を確認する。",
+      "body": "3台への異なる指示の並行受付、同じ機体の排他、個別STOPと他機体の継続、断線と再起動後の停止確認を検証する。",
+      "sources": [
+        {
+          "path": "apps/server/tests/test_station.py",
+          "find": "def test_three_direct_dispatches"
+        },
+        {
+          "path": "apps/server/tests/test_fleet.py",
+          "find": "def test_three_robots"
+        },
+        {
+          "path": "apps/server/tests/test_fleet.py",
+          "find": "def test_restart_retains"
+        }
+      ],
+      "inputs": [
+        "隔離SQLite / 注入時計 / 3エージェント"
+      ],
+      "outputs": [
+        "競合・停止・復旧の検証結果"
+      ],
+      "flow": [
+        {
+          "label": "並行受付・配信",
+          "code": "ThreadPoolExecutor"
+        },
+        {
+          "label": "1台だけ停止・断線",
+          "code": "他2台はCONTINUE"
+        },
+        {
+          "label": "再起動後に停止確認",
+          "code": "3件の占有を個別解放"
+        }
+      ],
+      "facts": [
+        [
+          "模擬ブラウザ",
+          "3台同時実行と個別・全台STOPを確認"
+        ],
+        [
+          "実機",
+          "Phase 5の実機完了条件は別途確認する"
+        ]
+      ]
+    },
+    {
+      "id": "station-dispatch",
+      "title": "直接指示の検証・受付",
+      "kind": "server",
+      "summary": "参加者・保存・予約を作らず、排他と受付を一括で確定する。",
+      "body": "requestIdを先に照合し、機体とASTが同じなら過去の実行を返す。新規受付は機体の接続・走行有効化・未完了実行を確認し、ASTを展開して時間を検証する。元のAST・命令・calibrationを共通実行表へ固定する。 クエストID・版も重複照合する。quests.resolve_programが分岐と繰り返しを解決し、岩と境界を検査する。受付時のマップと判定を保存し、COMPLETED後だけ論理判定を返す。",
+      "sources": [
+        {
+          "path": "apps/server/app/workshop.py",
+          "find": "def create_station_execution("
+        },
+        {
+          "path": "apps/server/app/workshop_models.py",
+          "find": "class StationExecutionCreate("
+        }
+      ],
+      "inputs": [
+        "stationToken / robotId / requestId / AST"
+      ],
+      "outputs": [
+        "kind=STATION / executionId / QUEUED"
+      ],
+      "flow": [
+        {
+          "label": "重複・占有を照合",
+          "code": "BEGIN IMMEDIATE"
+        },
+        {
+          "label": "ASTを展開・時間を検証",
+          "code": "expand_program() / execution_duration()"
+        },
+        {
+          "label": "実行を固定して受付",
+          "code": "INSERT executions / station_ast"
+        }
+      ],
+      "facts": [
+        [
+          "個人識別子",
+          "null。参加者を作成しない"
+        ],
+        [
+          "排他",
+          "未完了実行に割り込まない"
+        ],
+        [
+          "再送",
+          "元のASTと機体が異なる場合は409"
+        ]
+      ]
+    },
+    {
+      "id": "db-browser",
+      "title": "開発用DBブラウザー",
+      "kind": "client",
+      "summary": "テーブル・件数・列・行を管理内で閲覧する。",
+      "body": "管理のDB確認でテーブルを選び、25行ずつページングする。行の表示ボタンでJSON形式の値を展開して読む。長いテキストは先頭4000文字まで。値の変更やSQL入力は行わず、DB確認中も通常画面の下書きを保持する。",
+      "sources": [
+        {
+          "path": "apps/web/src/ManagementPanel.tsx",
+          "find": "function DatabaseBrowser("
+        },
+        {
+          "path": "apps/web/src/ManagementPanel.tsx",
+          "find": "function detailedRow("
+        }
+      ],
+      "inputs": [
+        "DB概要 / 列情報 / ページ内の行"
+      ],
+      "outputs": [
+        "テーブル表示 / 行詳細のJSON"
+      ],
+      "flow": [
+        {
+          "label": "DBの概要を取得",
+          "code": "GET station/database"
+        },
+        {
+          "label": "表のページを読む",
+          "code": "GET station/database/{table}"
+        },
+        {
+          "label": "行を構造化して表示",
+          "code": "detailedRow()"
+        }
+      ],
+      "facts": [
+        [
+          "表示",
+          "管理パネル内だけをスクロール"
+        ],
+        [
+          "認証情報",
+          "token_hashは非表示"
+        ],
+        [
+          "件数",
+          "画面は25行、APIは最大100行"
+        ]
+      ]
+    },
+    {
+      "id": "db-inspection",
+      "title": "SQLite読み取り専用API",
+      "kind": "server",
+      "summary": "許可済みテーブルだけを短い読取接続で参照する。",
+      "body": "既存DBをmode=roとPRAGMA query_only=ONで開く。表名は固定リストで照合し、limit・offsetを検証する。token_hashは非表示、長文は制限し、DB不在時は新規作成しない。接続待ちは0.2秒、クエリも0.25秒で打ち切り、制御処理を長時間妨げない。",
+      "sources": [
+        {
+          "path": "apps/server/app/inspection.py",
+          "find": "def readonly_database("
+        },
+        {
+          "path": "apps/server/app/inspection.py",
+          "find": "def database_overview("
+        },
+        {
+          "path": "apps/server/app/inspection.py",
+          "find": "def inspect_table("
+        }
+      ],
+      "inputs": [
+        "stationToken / 固定リストの表名 / limit / offset"
+      ],
+      "outputs": [
+        "readOnly=true / 列と行 / 件数"
+      ],
+      "flow": [
+        {
+          "label": "運営者の認証",
+          "code": "require_station()"
+        },
+        {
+          "label": "読取専用で開く",
+          "code": "mode=ro / query_only"
+        },
+        {
+          "label": "範囲と列を制限",
+          "code": "TABLES / REDACTED_COLUMNS / LIMIT"
+        }
+      ],
+      "facts": [
+        [
+          "更新API",
+          "提供しない。SQL入力も受け付けない"
+        ],
+        [
+          "DB不在",
+          "available=false。新規作成しない"
+        ],
+        [
+          "競合・時間超過",
+          "503 DATABASE_BUSY"
+        ]
+      ]
+    },
+    {
+      "id": "quests",
+      "title": "クエストとIFの解決",
+      "kind": "server",
+      "summary": "理想的な位置・向きを計算し、既存命令列へ変換する。",
+      "body": "config/quests.jsonがアプリ用8マップの正本。開始位置と向きから各移動を計算し、IFをその都度評価する。岩・マップ外は途中通過も拒否。最後の位置だけでクリア判定し、完了報告後に表示する。実機の到着を検知する機能ではない。",
+      "sources": [
+        {
+          "path": "apps/server/app/quests.py",
+          "find": "def resolve_program("
+        },
+        {
+          "path": "config/quests.json",
+          "find": "\"id\": \"Q01\""
+        }
+      ],
+      "inputs": [
+        "AST / クエストID・版 / マップ"
+      ],
+      "outputs": [
+        "MOVE・TURN・WAIT / 元ブロック番号 / 論理判定"
+      ],
+      "flow": [
+        {
+          "label": "開始状態",
+          "code": "start.cell / heading"
+        },
+        {
+          "label": "分岐を順に評価",
+          "code": "IF / REPEAT → MOVE・TURN・WAIT"
+        },
+        {
+          "label": "経路・終了位置を検査",
+          "code": "岩・境界を拒否 / 最終位置=goal"
+        }
+      ],
+      "facts": [
+        [
+          "任意選択",
+          "IF使用時は必須"
+        ],
+        [
+          "クリア",
+          "ゴール位置だけ。向き・経由・最適性は不問"
+        ],
+        [
+          "固定",
+          "マップ・版・展開命令を実行へ保存"
         ]
       ]
     }
@@ -2191,7 +2658,7 @@
         {
           "node": "future",
           "title": "次のフェーズ",
-          "text": "保存・予約・ASTは実装済み。「保存と予約」で確認。Blockly画面と3台運用は後続フェーズ。"
+          "text": "学習の進行はプリントで管理する。画面は機体への指示と送信に集中する。"
         }
       ],
       "groups": [
@@ -2305,7 +2772,7 @@
         {
           "node": "initialize",
           "title": "DBを設定に同期",
-          "text": "設定した個体を有効化し、以前のセッションと接続時刻を無効にする。"
+          "text": "旧テーブルをバックアップ後に除去し、実行履歴と採番を保持する。通常の再起動では未完了の占有を引き継ぐ。"
         },
         {
           "node": "firmware-config",
@@ -2428,7 +2895,7 @@
         {
           "node": "auth",
           "title": "個体を特定",
-          "text": "トークンに対応する個体を照合する。登録本文のrobotIdも確認する。"
+          "text": "機体通信と運営者の操作を別トークンで認証する。"
         },
         {
           "node": "schemas",
@@ -2449,156 +2916,6 @@
           "node": "poll",
           "title": "応答後に次を送る",
           "text": "要求の送信開始から1500msを期限とする。遅れて届いた許可では停止済み実行を復活させない。"
-        }
-      ],
-      "groups": []
-    },
-    {
-      "id": "workshop",
-      "title": "保存と予約",
-      "description": "参加者の保存から運営者の予約・通常実行、終端確認による解放まで。",
-      "positions": [
-        {
-          "id": "participant",
-          "x": 32,
-          "y": 116
-        },
-        {
-          "id": "program",
-          "x": 384,
-          "y": 116
-        },
-        {
-          "id": "ast",
-          "x": 736,
-          "y": 116
-        },
-        {
-          "id": "reservation",
-          "x": 32,
-          "y": 324
-        },
-        {
-          "id": "workshop-execution",
-          "x": 384,
-          "y": 324
-        },
-        {
-          "id": "execution-table",
-          "x": 736,
-          "y": 324
-        },
-        {
-          "id": "history",
-          "x": 32,
-          "y": 532
-        },
-        {
-          "id": "control",
-          "x": 384,
-          "y": 532
-        },
-        {
-          "id": "events",
-          "x": 736,
-          "y": 532
-        }
-      ],
-      "edges": [
-        {
-          "source": "participant",
-          "target": "program",
-          "label": "参加者として保存",
-          "kind": "data",
-          "description": ""
-        },
-        {
-          "source": "program",
-          "target": "ast",
-          "label": "構造と展開数を検証",
-          "kind": "data",
-          "description": ""
-        },
-        {
-          "source": "participant",
-          "target": "reservation",
-          "label": "運営者が参加者を指定",
-          "kind": "data",
-          "description": ""
-        },
-        {
-          "source": "reservation",
-          "target": "workshop-execution",
-          "label": "有効予約を照合",
-          "kind": "data",
-          "description": ""
-        },
-        {
-          "source": "ast",
-          "target": "workshop-execution",
-          "label": "展開済み命令",
-          "kind": "data",
-          "description": ""
-        },
-        {
-          "source": "workshop-execution",
-          "target": "execution-table",
-          "label": "版・命令・調整値を固定",
-          "kind": "data",
-          "description": ""
-        },
-        {
-          "source": "control",
-          "target": "execution-table",
-          "label": "配信・終端を保存",
-          "kind": "data",
-          "description": ""
-        },
-        {
-          "source": "history",
-          "target": "execution-table",
-          "label": "所有者の確認 / STOP",
-          "kind": "data",
-          "description": ""
-        },
-        {
-          "source": "execution-table",
-          "target": "events",
-          "label": "状態と位置の変化",
-          "kind": "data",
-          "description": ""
-        }
-      ],
-      "steps": [
-        {
-          "node": "participant",
-          "title": "参加者を発行",
-          "text": "運営者がトークンを発行し、本人の保存と履歴に権限を限定する。"
-        },
-        {
-          "node": "program",
-          "title": "保存して版を確定",
-          "text": "workspaceとASTを保存。更新はexpectedVersionで競合を防ぐ。"
-        },
-        {
-          "node": "reservation",
-          "title": "機体を予約",
-          "text": "運営者が参加者を指定。未使用だけが期限で失効する。"
-        },
-        {
-          "node": "workshop-execution",
-          "title": "固定して実行",
-          "text": "所有者・版・予約を照合し、命令と調整値をスナップショットにする。"
-        },
-        {
-          "node": "control",
-          "title": "終端を確認",
-          "text": "Phase 2と共通の通信。停止・完了の確定後に予約を解放する。"
-        },
-        {
-          "node": "events",
-          "title": "履歴を追う",
-          "text": "運営者は予約と実行状態の変化をeventId順に確認する。"
         }
       ],
       "groups": []
@@ -2652,6 +2969,11 @@
           "id": "lease",
           "x": 736,
           "y": 532
+        },
+        {
+          "id": "quests",
+          "x": 736,
+          "y": 740
         }
       ],
       "edges": [
@@ -2730,6 +3052,11 @@
           "node": "lease",
           "title": "停止を固定する",
           "text": "STOP・通信失敗・期限切れで停止する。終端ACK後に新実行を受け付ける。"
+        },
+        {
+          "node": "quests",
+          "title": "条件分岐を解決",
+          "text": "位置・向きを順に計算し、既存の命令列へ変換する。実行完了後にゴール位置だけを判定する。"
         }
       ],
       "groups": []
@@ -2833,7 +3160,7 @@
         {
           "node": "initialize",
           "title": "サーバーが再起動したら",
-          "text": "旧セッションを無効化し、全個体をOFFLINEへ戻す。"
+          "text": "旧テーブルをバックアップ後に除去し、実行履歴と採番を保持する。通常の再起動では未完了の占有を引き継ぐ。"
         },
         {
           "node": "reconnect",
@@ -2848,7 +3175,424 @@
         {
           "node": "tests",
           "title": "検証範囲を読む",
-          "text": "APIとホスト上の実行・解析コードで確認する。Phase 2は利用者が実機確認済み。定量測定値は未記録。"
+          "text": "直接送信・排他・停止・DB閲覧・旧データ整理を隔離環境で検証する。"
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "ui",
+      "title": "画面から実行",
+      "description": "機体を決めずに作成し、送信時に機体を選ぶ。管理操作は別パネルにまとめる。",
+      "positions": [
+        {
+          "id": "station",
+          "x": 32,
+          "y": 116
+        },
+        {
+          "id": "blockly",
+          "x": 384,
+          "y": 116
+        },
+        {
+          "id": "browser-ast",
+          "x": 736,
+          "y": 116
+        },
+        {
+          "id": "web-build",
+          "x": 32,
+          "y": 324
+        },
+        {
+          "id": "browser-save",
+          "x": 384,
+          "y": 324
+        },
+        {
+          "id": "browser-run",
+          "x": 736,
+          "y": 324
+        },
+        {
+          "id": "fleet-admin",
+          "x": 32,
+          "y": 532
+        },
+        {
+          "id": "station-dispatch",
+          "x": 384,
+          "y": 532
+        },
+        {
+          "id": "execution-table",
+          "x": 736,
+          "y": 532
+        },
+        {
+          "id": "quests",
+          "x": 736,
+          "y": 740
+        }
+      ],
+      "edges": [
+        {
+          "source": "station",
+          "target": "blockly",
+          "label": "機体の指示を編集",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "blockly",
+          "target": "browser-ast",
+          "label": "ASTを検証",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "blockly",
+          "target": "browser-save",
+          "label": "機体別の下書き",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "browser-ast",
+          "target": "browser-run",
+          "label": "検証したAST",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "browser-run",
+          "target": "station-dispatch",
+          "label": "機体へ直接送信",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "station-dispatch",
+          "target": "execution-table",
+          "label": "排他と受付を一括確定",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "web-build",
+          "target": "station",
+          "label": "同一オリジン配信",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "station-dispatch",
+          "target": "quests",
+          "label": "マップとIFを評価",
+          "kind": "data",
+          "description": ""
+        }
+      ],
+      "steps": [
+        {
+          "node": "station",
+          "title": "指示を作る",
+          "text": "ヘッダーや説明を外した固定画面でブロックを組む。"
+        },
+        {
+          "node": "browser-save",
+          "title": "共通下書きを保持",
+          "text": "機体に属さないworkspaceDraftとしてタブ内に保持する。"
+        },
+        {
+          "node": "browser-run",
+          "title": "最後に機体を選ぶ",
+          "text": "指示を固定してから送信先を指定し、確認ボタンで送る。"
+        },
+        {
+          "node": "station-dispatch",
+          "title": "検証して受付",
+          "text": "排他・命令・時間・重複を検証して一括で受付する。"
+        },
+        {
+          "node": "fleet-admin",
+          "title": "管理をまとめる",
+          "text": "機体状態・接続・DB確認は一つの管理パネルで扱う。"
+        },
+        {
+          "node": "quests",
+          "title": "条件分岐を解決",
+          "text": "位置・向きを順に計算し、既存の命令列へ変換する。実行完了後にゴール位置だけを判定する。"
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "fleet",
+      "title": "3台運用",
+      "description": "個体設定、共通の排他、3台の配信・停止・復旧と模擬検証。",
+      "positions": [
+        {
+          "id": "fleet-config",
+          "x": 32,
+          "y": 116
+        },
+        {
+          "id": "fleet-admin",
+          "x": 384,
+          "y": 116
+        },
+        {
+          "id": "fleet-simulation",
+          "x": 736,
+          "y": 116
+        },
+        {
+          "id": "station-dispatch",
+          "x": 32,
+          "y": 324
+        },
+        {
+          "id": "execution-table",
+          "x": 384,
+          "y": 324
+        },
+        {
+          "id": "control",
+          "x": 736,
+          "y": 324
+        },
+        {
+          "id": "fleet-test",
+          "x": 32,
+          "y": 532
+        },
+        {
+          "id": "agent",
+          "x": 384,
+          "y": 532
+        },
+        {
+          "id": "lease",
+          "x": 736,
+          "y": 532
+        }
+      ],
+      "edges": [
+        {
+          "source": "fleet-config",
+          "target": "fleet-admin",
+          "label": "個体の状態を表示",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "fleet-admin",
+          "target": "station-dispatch",
+          "label": "機体への直接送信",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "fleet-admin",
+          "target": "execution-table",
+          "label": "各実行へSTOP",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "control",
+          "target": "execution-table",
+          "label": "個体ごとの配信と報告",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "agent",
+          "target": "control",
+          "label": "登録 / 制御通信",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "fleet-simulation",
+          "target": "control",
+          "label": "実機と同じJSON契約",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "agent",
+          "target": "lease",
+          "label": "期限を監視",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "fleet-test",
+          "target": "execution-table",
+          "label": "3台の排他と復旧を検証",
+          "kind": "call",
+          "description": ""
+        }
+      ],
+      "steps": [
+        {
+          "node": "fleet-config",
+          "title": "個体を分ける",
+          "text": "異なるID・token・走行調整を設定する。"
+        },
+        {
+          "node": "station-dispatch",
+          "title": "受付を分ける",
+          "text": "同じ機体への割り込みを防ぎ、参加者を作らず機体ごとに受け付ける。"
+        },
+        {
+          "node": "control",
+          "title": "配信を分ける",
+          "text": "各機体へ別の実行IDと命令を配信する。"
+        },
+        {
+          "node": "fleet-admin",
+          "title": "停止を管理する",
+          "text": "個別STOPと全台STOP、終端確認を一覧する。"
+        },
+        {
+          "node": "fleet-test",
+          "title": "独立性を確認する",
+          "text": "断線・再起動の保持と個別解放を検証する。"
+        }
+      ],
+      "groups": []
+    },
+    {
+      "id": "operations",
+      "title": "管理とDB確認",
+      "description": "統合管理パネルと、DBを変更せずに内容を確認する経路。",
+      "positions": [
+        {
+          "id": "fleet-admin",
+          "x": 32,
+          "y": 116
+        },
+        {
+          "id": "db-browser",
+          "x": 384,
+          "y": 116
+        },
+        {
+          "id": "db-inspection",
+          "x": 736,
+          "y": 116
+        },
+        {
+          "id": "auth",
+          "x": 32,
+          "y": 324
+        },
+        {
+          "id": "database",
+          "x": 384,
+          "y": 324
+        },
+        {
+          "id": "execution-table",
+          "x": 736,
+          "y": 324
+        },
+        {
+          "id": "web-build",
+          "x": 32,
+          "y": 532
+        },
+        {
+          "id": "store",
+          "x": 384,
+          "y": 532
+        },
+        {
+          "id": "events",
+          "x": 736,
+          "y": 532
+        },
+        {
+          "id": "history",
+          "x": 32,
+          "y": 740
+        }
+      ],
+      "edges": [
+        {
+          "source": "fleet-admin",
+          "target": "db-browser",
+          "label": "DB確認を開く",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "db-browser",
+          "target": "db-inspection",
+          "label": "概要 / ページ取得",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "auth",
+          "target": "db-inspection",
+          "label": "運営者だけ許可",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "db-inspection",
+          "target": "database",
+          "label": "robotsを参照",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "db-inspection",
+          "target": "execution-table",
+          "label": "実行とASTを参照",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "db-inspection",
+          "target": "events",
+          "label": "イベントを参照",
+          "kind": "call",
+          "description": ""
+        },
+        {
+          "source": "history",
+          "target": "execution-table",
+          "label": "履歴照合・停止",
+          "kind": "data",
+          "description": ""
+        }
+      ],
+      "steps": [
+        {
+          "node": "fleet-admin",
+          "title": "管理を開く",
+          "text": "状態・接続設定・DB確認をタブで切り替える。"
+        },
+        {
+          "node": "auth",
+          "title": "運営者を認証",
+          "text": "機体通信と運営者の操作を別トークンで認証する。"
+        },
+        {
+          "node": "db-inspection",
+          "title": "読み取りだけ行う",
+          "text": "表名・ページ・時間を制限し、書き込み接続を使わない。"
+        },
+        {
+          "node": "db-browser",
+          "title": "行を読む",
+          "text": "件数と列を確認し、行の内容をJSONで開く。"
         }
       ],
       "groups": []
