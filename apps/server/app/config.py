@@ -33,6 +33,7 @@ def check_token(value: SecretStr) -> None:
 class WorkshopConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     station_token: SecretStr = Field(alias="stationToken")
+    # 既存の個体設定ファイルを読めるよう旧キーのみ受け付ける。現在の動作には使わない。
     reservation_ttl_seconds: int = Field(
         default=60, alias="reservationTtlSeconds", strict=True, ge=30, le=300
     )

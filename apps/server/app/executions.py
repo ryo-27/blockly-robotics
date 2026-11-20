@@ -63,6 +63,12 @@ class ExecutionStore(Store):
                 "program_version": "INTEGER",
                 "reservation_id": "TEXT",
                 "started_at": "REAL",
+                "station_ast": "TEXT",
+                "quest_id": "TEXT",
+                "quest_version": "INTEGER",
+                "quest_snapshot": "TEXT",
+                "quest_cleared": "INTEGER",
+                "command_block_indices": "TEXT",
             }.items():
                 if name not in columns:
                     conn.execute(f"ALTER TABLE executions ADD COLUMN {name} {definition}")

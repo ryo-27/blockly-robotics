@@ -37,26 +37,13 @@ with TestClient(create_app(config, output / "contract.sqlite3")) as client:
     control = {"protocolVersion": 2, "bootId": boot, "sessionId": registered["sessionId"], "sequence": 1, "status": "IDLE"}
     assert client.post("/api/robot-agent/control", headers=auth, json=control).status_code == 200
     station = {"Authorization": "Bearer " + "contract-station-" * 3}
-    participant = client.post("/api/sessions", headers=station, json={"label": "contract"})
-    assert participant.status_code == 200
-    participant = participant.json()
-    program = client.post("/api/programs",
-        headers={"Authorization": "Bearer " + participant["sessionToken"]}, json={
-            "requestId": str(uuid4()), "ast": {"version": 1, "commands": [
-                {"type": "REPEAT", "count": 1, "body": [
-                    {"type": "MOVE", "direction": "FORWARD", "steps": 2},
-                    {"type": "TURN", "direction": "RIGHT"}, {"type": "WAIT", "durationMs": 100}
-                ]}
+    queued = client.post("/api/robots/robot-01/executions", headers=station, json={
+        "requestId": str(uuid4()), "questId": "Q01", "questVersion": 1, "ast": {"version": 1, "commands": [
+            {"type": "REPEAT", "count": 1, "body": [
+                {"type": "IF", "condition": {"type": "CAN_MOVE_FORWARD"}, "body": [{"type": "MOVE", "direction": "FORWARD", "steps": 2}], "elseBody": [{"type": "TURN", "direction": "LEFT"}]},
+                {"type": "TURN", "direction": "RIGHT"}, {"type": "WAIT", "durationMs": 100}
             ]}
-        })
-    assert program.status_code == 200
-    reservation = client.post("/api/robots/robot-01/reservations", headers=station,
-        json={"requestId": str(uuid4()), "sessionId": participant["sessionId"]})
-    assert reservation.status_code == 200
-    queued = client.post("/api/executions", headers=station, json={
-        "requestId": str(uuid4()), "programId": program.json()["programId"],
-        "programVersion": program.json()["version"],
-        "reservationId": reservation.json()["reservationId"]
+        ]}
     })
     assert queued.status_code == 200
     control["sequence"] = 2

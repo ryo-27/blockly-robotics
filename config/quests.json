@@ -1,0 +1,169 @@
+[
+  {
+    "id": "Q01",
+    "version": 1,
+    "title": "探検基地",
+    "map": {
+      "width": 5,
+      "height": 5,
+      "start": {
+        "cell": "A1",
+        "heading": "N"
+      },
+      "goal": "B3",
+      "blocked": [
+        "C2",
+        "C3"
+      ],
+      "checkpoints": []
+    }
+  },
+  {
+    "id": "Q02",
+    "version": 1,
+    "title": "岩場の向こう",
+    "map": {
+      "width": 5,
+      "height": 5,
+      "start": {
+        "cell": "A1",
+        "heading": "N"
+      },
+      "goal": "D3",
+      "blocked": [
+        "C2",
+        "C3"
+      ],
+      "checkpoints": []
+    }
+  },
+  {
+    "id": "Q03",
+    "version": 1,
+    "title": "調査ポイントの島",
+    "map": {
+      "width": 5,
+      "height": 5,
+      "start": {
+        "cell": "A1",
+        "heading": "N"
+      },
+      "goal": "E2",
+      "blocked": [
+        "C2",
+        "C3"
+      ],
+      "checkpoints": [
+        "B4"
+      ]
+    }
+  },
+  {
+    "id": "Q04",
+    "version": 1,
+    "title": "島の奥へ",
+    "map": {
+      "width": 5,
+      "height": 5,
+      "start": {
+        "cell": "A1",
+        "heading": "N"
+      },
+      "goal": "E4",
+      "blocked": [
+        "C2",
+        "C3"
+      ],
+      "checkpoints": [
+        "B2"
+      ]
+    }
+  },
+  {
+    "id": "Q05",
+    "version": 1,
+    "title": "探検ルート",
+    "map": {
+      "width": 5,
+      "height": 5,
+      "start": {
+        "cell": "A1",
+        "heading": "N"
+      },
+      "goal": "E2",
+      "blocked": [
+        "C2",
+        "C3"
+      ],
+      "checkpoints": []
+    }
+  },
+  {
+    "id": "Q06",
+    "version": 1,
+    "title": "基地に戻ろう",
+    "map": {
+      "width": 5,
+      "height": 5,
+      "start": {
+        "cell": "A1",
+        "heading": "N"
+      },
+      "goal": "A1",
+      "blocked": [
+        "C2",
+        "C3"
+      ],
+      "checkpoints": [
+        "A5",
+        "E5",
+        "E1"
+      ]
+    }
+  },
+  {
+    "id": "Q07",
+    "version": 1,
+    "title": "ふたつの調査ポイント",
+    "map": {
+      "width": 5,
+      "height": 5,
+      "start": {
+        "cell": "A1",
+        "heading": "N"
+      },
+      "goal": "E4",
+      "blocked": [
+        "C2",
+        "C3"
+      ],
+      "checkpoints": [
+        "B4",
+        "D1"
+      ]
+    }
+  },
+  {
+    "id": "Q08",
+    "version": 1,
+    "title": "遺跡の宝",
+    "map": {
+      "width": 5,
+      "height": 5,
+      "start": {
+        "cell": "A1",
+        "heading": "N"
+      },
+      "goal": "C5",
+      "blocked": [
+        "C2",
+        "C3"
+      ],
+      "checkpoints": [
+        "A3",
+        "B3",
+        "B5"
+      ]
+    }
+  }
+]

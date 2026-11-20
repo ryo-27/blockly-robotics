@@ -23,9 +23,9 @@ from app.execution_models import (
 from app.executions import ExecutionError
 from app.schemas import AgentResponse, HeartbeatRequest, RegisterRequest, RobotView
 from app.store import SessionConflict, token_digest
+from app.web import mount_web
 from app.workshop import WorkshopStore
 from app.workshop_api import workshop_router
-from app.workshop_models import Principal
 
 bearer = HTTPBearer(auto_error=False)
 Credentials = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
@@ -48,7 +48,7 @@ def create_app(
         application.state.settings = settings
         yield
 
-    api = FastAPI(title="Robot Workshop API", version="0.3.0", lifespan=lifespan)
+    api = FastAPI(title="Robot Workshop API", version="0.5.0", lifespan=lifespan)
 
     @api.exception_handler(RequestValidationError)
     async def validation_error(request: Request, error: RequestValidationError):
@@ -83,22 +83,11 @@ def create_app(
         if not hmac.compare_digest(token_digest(token), token_digest(expected)):
             raise HTTPException(403, "STATION_ACCESS_REQUIRED")
 
-    def require_client(token: Annotated[str, Depends(require_token)]) -> Principal:
-        expected = api.state.settings.station_token.get_secret_value()
-        if hmac.compare_digest(token_digest(token), token_digest(expected)):
-            return Principal("STATION")
-        owner = store.authenticate_session(token, clock())
-        if owner is None:
-            if store.authenticate(token) is not None:
-                raise HTTPException(403, "CLIENT_ACCESS_REQUIRED")
-            raise HTTPException(401, "INVALID_SESSION_TOKEN")
-        return Principal("PARTICIPANT", owner)
-
     @api.get("/api/health")
     def health():
-        return {"status": "ok", "protocolVersion": 1, "phase": 3}
+        return {"status": "ok", "protocolVersion": 1, "phase": 5}
 
-    @api.get("/api/robots", response_model=list[RobotView], dependencies=[Depends(require_client)])
+    @api.get("/api/robots", response_model=list[RobotView], dependencies=[Depends(require_station)])
     def robots():
         return store.list_robots(clock())
 
@@ -159,7 +148,8 @@ def create_app(
         except ExecutionError as error:
             raise HTTPException(error.status_code, error.code) from error
 
-    api.include_router(workshop_router(store, clock, require_client, require_station))
+    api.include_router(workshop_router(store, clock, require_station))
+    mount_web(api)
     return api
 
 
