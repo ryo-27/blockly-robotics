@@ -1,29 +1,29 @@
 {
   "title": "Blockly Robotics システムマップ",
-  "phase": "Phase 2 · 実機確認済み",
+  "phase": "Phase 3 · 実機確認済み",
   "nodes": [
     {
       "id": "station",
       "title": "ブラウザ・タブレット",
       "kind": "client",
-      "summary": "Swaggerで一覧・試験実行・STOPを操作する。",
-      "body": "Phase 2の操作入口はFastAPIの /docs。stationTokenで一覧と運営者用の試験APIを使う。子ども向けBlockly・予約・参加者の認証はまだない。",
+      "summary": "参加者の保存と運営者の予約・実行を操作する。",
+      "body": "Phase 3の操作入口はFastAPIの /docs。参加者sessionTokenで自分のプログラム保存・履歴・STOP、stationTokenで参加者発行・機体予約・実行開始を行う。Blocklyの編集画面はPhase 4で追加する。",
       "inputs": [
         "MacBookのLANアドレス:8000/docs",
         "stationToken（Bearerの値）"
       ],
       "outputs": [
-        "個体一覧",
-        "試験実行の受付・状態確認・STOP"
+        "参加者発行 / Program保存",
+        "予約 / 通常実行 / 履歴 / STOP"
       ],
       "sources": [
         {
-          "path": "apps/server/app/main.py",
-          "find": "def create_test_execution("
+          "path": "apps/server/app/workshop_api.py",
+          "find": "def workshop_router("
         },
         {
-          "path": "docs/phase-2-verification.md",
-          "find": "## 命令送信"
+          "path": "docs/phase-3-verification.md",
+          "find": "## 予約して実行"
         }
       ],
       "facts": [
@@ -42,16 +42,16 @@
       ],
       "flow": [
         {
-          "label": "API操作画面へ",
-          "code": "/docs"
+          "label": "運営者が参加者を発行",
+          "code": "POST /api/sessions"
         },
         {
-          "label": "ステーション認証",
-          "code": "stationToken"
+          "label": "参加者が保存",
+          "code": "POST /api/programs"
         },
         {
-          "label": "一覧・試験・停止",
-          "code": "test-executions / stop"
+          "label": "運営者が予約して開始",
+          "code": "reservations → executions"
         }
       ]
     },
@@ -60,10 +60,10 @@
       "title": "FastAPI",
       "kind": "server",
       "summary": "認証・JSON検証・処理の入口をまとめる。",
-      "body": "create_app()がExecutionStoreを組み立て、lifespanで設定とDBを初期化する。旧版の登録・Heartbeatを保ち、protocolVersion=2の制御通信と運営者の試験APIを追加している。",
+      "body": "create_app()がWorkshopStoreを組み立て、lifespanで設定とDBを初期化する。workshop_routerが保存・予約・通常実行の入口を追加し、認証と型検証を通してStoreへ渡す。機体の登録・制御プロトコルはPhase 2と共通。",
       "inputs": [
         "HTTPリクエスト",
-        "WorkshopConfig / Store"
+        "WorkshopConfig / WorkshopStore"
       ],
       "outputs": [
         "JSON応答またはHTTPエラー"
@@ -91,7 +91,7 @@
       "flow": [
         {
           "label": "アプリと保存処理を用意",
-          "code": "create_app() / ExecutionStore"
+          "code": "create_app() / WorkshopStore"
         },
         {
           "label": "設定・DBを初期化",
@@ -175,40 +175,44 @@
     },
     {
       "id": "store",
-      "title": "Store / ExecutionStore",
+      "title": "WorkshopStore / SQLite",
       "kind": "data",
-      "summary": "個体・試験実行・許可をSQLiteで管理する。",
-      "body": "Storeが個体・接続の保存と状態算出を担当し、ExecutionStoreが試験受付・排他・STOP・配信と許可更新を扱う。BEGIN IMMEDIATEで照合と更新を同じトランザクションにする。",
+      "summary": "保存・予約・実行を同じSQLiteで管理する。",
+      "body": "Storeが個体と接続、ExecutionStoreが共通の実行とSTOP、WorkshopStoreが参加者・保存・予約・通常実行を担当する。BEGIN IMMEDIATEで照合と更新を同じトランザクションにし、所有者・版・占有を一括で確定する。",
       "inputs": [
         "設定と個体の報告",
         "試験命令・requestId・停止要求"
       ],
       "outputs": [
-        "robots / test_executions",
-        "制御応答・試験状態"
+        "robots / programs / reservations / executions",
+        "認証結果 / 受付と状態 / イベント"
       ],
       "sources": [
         {
-          "path": "apps/server/app/store.py",
-          "find": "class Store:"
+          "path": "apps/server/app/workshop.py",
+          "find": "class WorkshopStore("
         },
         {
           "path": "apps/server/app/executions.py",
           "find": "class ExecutionStore("
+        },
+        {
+          "path": "apps/server/app/store.py",
+          "find": "def connection("
         }
       ],
       "flow": [
         {
-          "label": "照合と更新を開始",
-          "code": "BEGIN IMMEDIATE"
+          "label": "接続の基盤",
+          "code": "Store"
         },
         {
-          "label": "個体と実行を管理",
-          "code": "Store / ExecutionStore"
+          "label": "配信と実行の共通処理",
+          "code": "ExecutionStore"
         },
         {
-          "label": "確定して接続を閉じる",
-          "code": "COMMIT / ROLLBACK"
+          "label": "参加者・保存・予約",
+          "code": "WorkshopStore"
         }
       ]
     },
@@ -217,7 +221,7 @@
       "title": "SQLite / robots",
       "kind": "data",
       "summary": "個体設定と接続状態を1個体1行で保持する。",
-      "body": "robotsは個体ID、認証ハッシュ、接続情報に加え、走行の有効化・キャリブレーション・制御通信の時刻を持つ。status列はなく、last_seenからIDLE/OFFLINEを算出する。試験実行の履歴は別のtest_executions表。",
+      "body": "robotsは個体ID、認証ハッシュ、接続、走行有効化、calibration、制御時刻を保持する。statusはlast_seenから算出する。参加者・プログラム・予約・共通実行・イベントも同じSQLite内の別表へ保存する。",
       "inputs": [
         "StoreからのSQL"
       ],
@@ -321,12 +325,12 @@
     },
     {
       "id": "future",
-      "title": "予約・Blockly・本番運用",
+      "title": "Blockly UI・3台運用",
       "kind": "planned",
-      "summary": "後続フェーズで追加する。",
-      "body": "Phase 2は運営者用の試験APIと基本実行エンジンまで。参加者のProgram・Reservation・Session管理、Blockly、ASTとREPEAT展開、3台運用は後続フェーズで追加する。",
+      "summary": "Phase 4以降で画面と教室運用を追加する。",
+      "body": "Phase 3までの保存・REPEAT展開・予約・通常実行は実装済み。Phase 4でReact / Blockly UI、Phase 5で3台の実環境運用、Phase 6で教材を整える。現在の操作入口はSwagger。",
       "inputs": [
-        "設計仕様書のPhase 2〜6"
+        "設計仕様書のPhase 4〜6"
       ],
       "outputs": [
         "これから実装する機能"
@@ -340,16 +344,16 @@
       "status": "planned",
       "flow": [
         {
-          "label": "予約と保存",
-          "code": "Phase 3"
+          "label": "編集と実行の画面",
+          "code": "Phase 4 / React・Blockly"
         },
         {
-          "label": "Blockly / AST / REPEAT",
-          "code": "Phase 4"
+          "label": "教室の同時運用",
+          "code": "Phase 5 / 3台"
         },
         {
-          "label": "3台運用と教材",
-          "code": "Phase 5 / 6"
+          "label": "教育用コンテンツ",
+          "code": "Phase 6"
         }
       ]
     },
@@ -357,8 +361,8 @@
       "id": "server-config",
       "title": "サーバーの個体設定",
       "kind": "config",
-      "summary": "許可する機体・表示名・トークンを決める。",
-      "body": "load_config()が設定JSONを読み、個体ID・資格情報・motionEnabled・calibrationを検証する。既存設定で走行有効化を省略した場合はfalse。設定変更後はサーバーを再起動する。受付時のキャリブレーションはその実行に固定される。",
+      "summary": "個体・走行調整・予約と参加者の期限を決める。",
+      "body": "load_config()が個体の資格情報・motionEnabled・calibrationと、予約TTL・参加者TTLを検証する。期限は省略時60秒・8時間。既存の秘密設定と走行調整値は保持する。サーバー再起動で反映し、受付済み実行のcalibrationは固定される。",
       "inputs": [
         "WORKSHOP_CONFIG または config/local.json"
       ],
@@ -377,6 +381,10 @@
         {
           "path": "config/local.example.json",
           "find": "\"motionEnabled\""
+        },
+        {
+          "path": "apps/server/app/config.py",
+          "find": "reservation_ttl_seconds:"
         }
       ],
       "facts": [
@@ -395,6 +403,14 @@
         [
           "更新",
           "JSON編集後にサーバー再起動。旧実行は停止確認へ"
+        ],
+        [
+          "reservationTtlSeconds",
+          "30〜300秒。既定60秒、RESERVEDだけに適用"
+        ],
+        [
+          "participantSessionTtlSeconds",
+          "300〜86400秒。既定28800秒"
         ]
       ],
       "flow": [
@@ -549,7 +565,7 @@
       "title": "サーバー起動",
       "kind": "server",
       "summary": "設定・DBを初期化してHTTPを受ける。",
-      "body": "Uvicornがapp.main:appを読み、lifespanで設定とExecutionStoreを初期化する。既存robots表の列追加とtest_executions表・索引を用意する。起動時に旧セッションを無効化し、進行中実行をSTOP_REQUESTEDにする。",
+      "body": "Uvicornがapp.main:appを読み、lifespanでWorkshopStoreを初期化する。Phase 2の実行表をexecutionsへ名前変更し、履歴と採番の最高値を保持する。旧通信セッションを無効にし、進行中実行はSTOP_REQUESTEDへ移す。参加者・保存・予約は保持する。",
       "inputs": [
         "uv run --locked uvicorn app.main:app --host 0.0.0.0 --port 8000"
       ],
@@ -599,8 +615,8 @@
       "id": "initialize",
       "title": "DBの起動時同期",
       "kind": "data",
-      "summary": "設定個体を反映し、接続を未確認に戻す。",
-      "body": "Store.initialize()が個体設定と接続を同期し、ExecutionStore.initialize()が試験実行の表と部分一意索引を用意する。進行中実行はSTOP_REQUESTEDとして保持し、停止確認なしに新規実行へ割り当てない。",
+      "summary": "履歴と採番を引き継ぎ、停止待ちを保持する。",
+      "body": "Store → ExecutionStore → WorkshopStoreの順に表と索引を初期化する。旧test_executionsの名前変更でsqlite_sequenceの最高値も維持する。両方の実行表が存在する不整合は起動を拒否する。実行中予約は停止確認まで占有を保持する。",
       "inputs": [
         "WorkshopConfig",
         "既存DB"
@@ -611,11 +627,11 @@
       ],
       "sources": [
         {
-          "path": "apps/server/app/store.py",
-          "find": "def initialize("
+          "path": "apps/server/app/executions.py",
+          "find": "ALTER TABLE test_executions RENAME TO executions"
         },
         {
-          "path": "apps/server/app/executions.py",
+          "path": "apps/server/app/workshop.py",
           "find": "def initialize("
         }
       ],
@@ -626,7 +642,7 @@
         ],
         [
           "履歴",
-          "test_executionsを保持"
+          "executionsへ移行・履歴を保持"
         ],
         [
           "進行中",
@@ -640,7 +656,7 @@
         },
         {
           "label": "実行表と索引を確認",
-          "code": "ExecutionStore.initialize()"
+          "code": "WorkshopStore.initialize()"
         },
         {
           "label": "未完了は停止確認へ",
@@ -703,8 +719,8 @@
       "id": "auth",
       "title": "個体・ステーション認証",
       "kind": "server",
-      "summary": "用途の違うBearerトークンを照合する。",
-      "body": "require_robot()は個体トークンのSHA-256をDB内の有効個体と比較し、個体IDを返す。require_station()は一覧用トークンを照合する。ロボットの登録では本文のrobotIdと認証されたIDも一致させる。",
+      "summary": "個体・運営者・参加者の権限を分ける。",
+      "body": "require_robot()は個体のトークンを照合する。require_station()は発行・予約・実行開始を運営者に限定する。require_client()はstationTokenまたは有効な参加者sessionTokenを受け付ける。参加者の保存・履歴・STOPは自分のデータだけ。DBへはトークンのSHA-256を保存する。",
       "inputs": [
         "Authorization: Bearer <token>"
       ],
@@ -714,15 +730,15 @@
       "sources": [
         {
           "path": "apps/server/app/main.py",
-          "find": "def require_robot("
+          "find": "def require_client("
         },
         {
           "path": "apps/server/app/main.py",
           "find": "def require_station("
         },
         {
-          "path": "apps/server/app/store.py",
-          "find": "def authenticate("
+          "path": "apps/server/app/workshop.py",
+          "find": "def authenticate_session("
         }
       ],
       "facts": [
@@ -741,16 +757,16 @@
       ],
       "flow": [
         {
-          "label": "HTTPから資格情報を受ける",
-          "code": "Authorization: Bearer"
+          "label": "個体通信",
+          "code": "robot token → robotId"
         },
         {
-          "label": "用途ごとに照合する",
-          "code": "require_robot() / require_station()"
+          "label": "機体予約・実行開始",
+          "code": "stationToken → STATION"
         },
         {
-          "label": "個体ID・権限を確定",
-          "code": "robot_id / ステーション"
+          "label": "自分の保存とSTOP",
+          "code": "sessionToken → PARTICIPANT"
         }
       ]
     },
@@ -759,7 +775,7 @@
       "title": "JSONメッセージ検証",
       "kind": "server",
       "summary": "HTTPと内部の名前・型を対応させる。",
-      "body": "旧版のMessageはcamelCaseとsnake_caseを対応させ、未知フィールドを拒否する。execution_models.pyがPhase 2の命令型・制御通信・状態の組み合わせを検証する。bool・小数の数値や未対応命令は拒否する。",
+      "body": "MessageはcamelCaseとsnake_caseを対応させ、未知フィールドを拒否する。execution_models.pyが機体命令と制御通信、workshop_models.pyが参加者・Program AST・予約・通常実行を検証する。ASTのREPEATを展開して既存のMOVE・TURN・WAITへ変換する。",
       "inputs": [
         "RegisterRequest / HeartbeatRequest"
       ],
@@ -783,6 +799,10 @@
         {
           "path": "apps/server/app/main.py",
           "find": "async def validation_error("
+        },
+        {
+          "path": "apps/server/app/workshop_models.py",
+          "find": "class ProgramAst("
         }
       ],
       "facts": [
@@ -1032,7 +1052,7 @@
       "title": "IDLE / OFFLINEの算出",
       "kind": "data",
       "summary": "最後の正常通信から3秒が境界になる。",
-      "body": "接続表示はlast_seenが0秒以上3秒未満ならIDLE、それ以外はOFFLINE。実行状態は別のexecutionStatusとexecutionIdで返す。接続がIDLEでも走行中・停止待ちの可能性があり、次の受付にはlast_controlと未完了実行も照合する。",
+      "body": "statusは直近3秒未満の正常通信ならIDLE、それ以外はOFFLINE。availabilityは制御通信・走行有効化・予約・実行から算出し、空いている時だけavailable=trueとする。OFFLINEでも占有を解放しない。画面表示後の競合は受付トランザクションで再確認する。",
       "inputs": [
         "now / last_seen / enabled"
       ],
@@ -1045,26 +1065,22 @@
           "find": "def list_robots("
         },
         {
-          "path": "apps/server/app/executions.py",
+          "path": "apps/server/app/workshop.py",
           "find": "def list_robots("
         }
       ],
       "facts": [
         [
           "status",
-          "接続表示のIDLE / OFFLINE"
+          "接続表示：IDLE / OFFLINE"
         ],
         [
-          "executionStatus",
-          "QUEUED / DISPATCHED / RUNNING / STOP_REQUESTEDなど"
+          "availability",
+          "IDLE / RESERVED / READY / RUNNING / STOPPING / OFFLINE / UNAVAILABLE"
         ],
         [
-          "受付準備",
-          "last_controlが直近3秒未満、報告IDLE、未完了実行なし"
-        ],
-        [
-          "注意",
-          "3秒OFFLINE表示は停止遅延の保証ではない"
+          "available",
+          "IDLEかつ予約・実行なしの場合だけtrue"
         ]
       ],
       "flow": [
@@ -1153,8 +1169,8 @@
       "id": "tests",
       "title": "API・実行エンジン試験",
       "kind": "test",
-      "summary": "APIと実機用の実行・解析コードを検証する。",
-      "body": "APIは隔離SQLiteと注入した時計で実行・停止・競合・再起動を検証する。ホスト試験は実機用のexecutor.cppとprogram_parser.cppを仮の出力とJournalで動かす。利用者はPhase 2の実機確認を完了。停止遅延などの定量測定値は未記録。",
+      "summary": "所有者・競合・移行と機体の通信契約を検証する。",
+      "body": "隔離SQLiteと時計で保存・同時編集・予約・排他・期限・所有者・再起動・Phase 2移行を検証する。ホスト試験は実機C++とAPIの通信契約も確認する。Phase 3は2026年11月20日に利用者が予約から実行完了までの実機確認を完了。全異常系の実機実施や停止遅延の定量測定を示すものではない。",
       "inputs": [
         "pytest / tmp_path / 注入したclock"
       ],
@@ -1163,30 +1179,30 @@
       ],
       "sources": [
         {
-          "path": "apps/server/tests/test_executions.py",
-          "find": "def test_execution_lifecycle("
+          "path": "apps/server/tests/test_workshop.py",
+          "find": "def test_"
         },
         {
           "path": "firmware/test/executor_test.cpp",
           "find": "int main("
         },
         {
-          "path": "docs/phase-2-verification.md",
-          "find": "## 必須の実機試験"
+          "path": "docs/phase-3-verification.md",
+          "find": "## 追加の確認"
         }
       ],
       "facts": [
         [
           "API",
-          "既存17件＋Phase 2の30件（合計47件）"
+          "87件：接続・実行・保存・予約・権限・競合・DB移行"
         ],
         [
-          "ホスト",
-          "実行・解析に加え、C++生成の全5状態をPythonのControlRequestで検証"
+          "機体コード",
+          "ホストC++試験と双方向のJSON契約試験"
         ],
         [
           "実機",
-          "Phase 1・Phase 2とも利用者が実機確認済み"
+          "Phase 1〜3は利用者確認済み。Phase 3は予約から通常実行完了までを確認"
         ]
       ],
       "flow": [
@@ -1311,7 +1327,7 @@
       "title": "試験実行とSTOP",
       "kind": "server",
       "summary": "運営者の命令を受付し、停止を要求する。",
-      "body": "create_test()はrequestIdの重複、機体の制御接続、走行有効化、占有と時間上限を検証する。受付時のcalibrationを固定してQUEUEDへ保存する。stop_test()は未配信なら取消し、配信後は停止報告を待つ。",
+      "body": "運営者の試験APIは既存のまま使えるが、予約のある機体へは割り込めない。通常実行と共通のexecutions表と排他制御を使い、受付時にcalibrationを固定する。STOPは未配信なら取消し、配信後は停止報告を待つ。",
       "inputs": [
         "stationToken",
         "requestId / MOVE・TURN・WAIT"
@@ -1365,10 +1381,10 @@
     },
     {
       "id": "execution-table",
-      "title": "SQLite / test_executions",
+      "title": "SQLite / executions",
       "kind": "data",
-      "summary": "命令列と実行状態を保持する。",
-      "body": "execution_sequenceはAUTOINCREMENT。個体ごとの未完了実行に部分一意索引を置く。STOP_REQUESTEDも未完了なので、通信断や停止要求だけでは再割当しない。DBを巻き戻すと機体の消費済み番号より小さくなる場合があり、運営者による復旧が必要。",
+      "summary": "試験・通常実行の命令と状態を共通保存する。",
+      "body": "kind=TEST / WORKSHOPを同じ表で管理する。execution_sequenceはAUTOINCREMENT、未完了実行に機体単位の部分一意索引を置く。通常実行は参加者・保存版・予約も記録し、命令列とcalibrationを固定する。旧表からの移行で採番を引き継ぐ。",
       "inputs": [
         "試験APIと制御通信"
       ],
@@ -1379,11 +1395,11 @@
       "sources": [
         {
           "path": "apps/server/app/executions.py",
-          "find": "CREATE TABLE IF NOT EXISTS test_executions"
+          "find": "CREATE TABLE IF NOT EXISTS executions"
         },
         {
           "path": "apps/server/app/executions.py",
-          "find": "CREATE UNIQUE INDEX IF NOT EXISTS one_active_test_per_robot"
+          "find": "CREATE UNIQUE INDEX IF NOT EXISTS one_active_execution_per_robot"
         }
       ],
       "facts": [
@@ -1445,7 +1461,7 @@
         },
         {
           "label": "実行状態を更新",
-          "code": "test_executions"
+          "code": "executions"
         },
         {
           "label": "状態に応じて応答",
@@ -1710,13 +1726,366 @@
           "code": "IDLE"
         }
       ]
+    },
+    {
+      "id": "participant",
+      "title": "参加者セッション",
+      "kind": "server",
+      "summary": "運営者が期限付きトークンを発行する。",
+      "body": "sessionTokenは発行応答に1度だけ含め、DBへはSHA-256のみ保存する。既定8時間で失効。明示的な失効では未使用予約を失効し、配信済みの実行へ停止を要求する。参加者のsessionIdは機体通信のsessionIdとは別。",
+      "inputs": [
+        "stationToken / label"
+      ],
+      "outputs": [
+        "sessionId / sessionToken / expiresAt"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/workshop.py",
+          "find": "def issue_session("
+        },
+        {
+          "path": "apps/server/app/workshop.py",
+          "find": "def revoke_session("
+        }
+      ],
+      "flow": [
+        {
+          "label": "運営者が発行",
+          "code": "POST /api/sessions"
+        },
+        {
+          "label": "参加者として操作",
+          "code": "Bearer sessionToken"
+        },
+        {
+          "label": "失効と停止要求",
+          "code": "DELETE /api/sessions/{id}"
+        }
+      ],
+      "facts": [
+        [
+          "個体通信",
+          "robot tokenで別認証"
+        ],
+        [
+          "自然失効",
+          "新しい操作を拒否。受付済み実行は機体の許可期限で管理"
+        ]
+      ]
+    },
+    {
+      "id": "program",
+      "title": "Programの保存・版",
+      "kind": "data",
+      "summary": "workspaceとASTを参加者ごとに保存する。",
+      "body": "作成は所有者とrequestIdで重複を防ぐ。更新はexpectedVersionが一致した場合だけversionを進める。参加者は自分の保存だけを取得・更新でき、同時編集は409になる。Blockly workspaceは保管し、実行はASTのみを使う。",
+      "inputs": [
+        "sessionToken / name / ast",
+        "blocklyWorkspace / expectedVersion"
+      ],
+      "outputs": [
+        "programId / version / expandedCommandCount"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/workshop.py",
+          "find": "def create_program("
+        },
+        {
+          "path": "apps/server/app/workshop.py",
+          "find": "def update_program("
+        }
+      ],
+      "flow": [
+        {
+          "label": "新規保存",
+          "code": "POST /api/programs"
+        },
+        {
+          "label": "競合を照合",
+          "code": "expectedVersion == version"
+        },
+        {
+          "label": "次の版を保存",
+          "code": "PUT /api/programs/{id}"
+        }
+      ],
+      "facts": [
+        [
+          "workspace",
+          "200kBまで。UIの実装はPhase 4"
+        ],
+        [
+          "所有者",
+          "参加者本人。運営者は閲覧可能"
+        ]
+      ]
+    },
+    {
+      "id": "ast",
+      "title": "AST・REPEATの展開",
+      "kind": "server",
+      "summary": "構造を検証し、最大64命令へ展開する。",
+      "body": "AST version=1のMOVE・TURN・WAITとREPEATだけを受け付ける。REPEATの回数と深さ、JSONサイズ、展開後の個数を保存時に検証する。機体のcalibrationで実行時間を計算するのは通常実行の受付時。",
+      "inputs": [
+        "ProgramAst version=1"
+      ],
+      "outputs": [
+        "展開済みMOVE / TURN / WAIT"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/workshop_models.py",
+          "find": "class RepeatCommand("
+        },
+        {
+          "path": "apps/server/app/workshop_models.py",
+          "find": "def expand_program("
+        }
+      ],
+      "flow": [
+        {
+          "label": "AST構造を検証",
+          "code": "ProgramContent.valid_program()"
+        },
+        {
+          "label": "くり返しを展開",
+          "code": "expand_program()"
+        },
+        {
+          "label": "実行時間を照合",
+          "code": "validate_program()"
+        }
+      ],
+      "facts": [
+        [
+          "REPEAT",
+          "1〜20回、入れ子3段"
+        ],
+        [
+          "上限",
+          "AST 32kB、展開64命令"
+        ],
+        [
+          "実行時間",
+          "1命令5秒、合計30秒"
+        ]
+      ]
+    },
+    {
+      "id": "reservation",
+      "title": "機体の予約・期限",
+      "kind": "data",
+      "summary": "未使用予約だけを失効し、実行中は保持する。",
+      "body": "stationTokenで参加者の機体を予約する。RESERVEDは既定60秒で失効し、明示更新で延長できる。IN_USEは期限経過でも解放しない。試験APIも含めて割り込みを拒否する。期限判定と占有の照合はAPIのトランザクション内で行う。",
+      "inputs": [
+        "stationToken / robotId / sessionId",
+        "requestId"
+      ],
+      "outputs": [
+        "reservationId / expiresAt / status"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/workshop.py",
+          "find": "def reserve("
+        },
+        {
+          "path": "apps/server/app/workshop.py",
+          "find": "def _expire_reservations("
+        },
+        {
+          "path": "apps/server/app/workshop.py",
+          "find": "def renew_reservation("
+        }
+      ],
+      "flow": [
+        {
+          "label": "未使用で占有",
+          "code": "RESERVED"
+        },
+        {
+          "label": "実行受付と同時に変更",
+          "code": "IN_USE"
+        },
+        {
+          "label": "終端確定で解放",
+          "code": "FINISHED"
+        }
+      ],
+      "facts": [
+        [
+          "更新",
+          "RESERVEDのみ。再送は期限延長しない"
+        ],
+        [
+          "解放",
+          "RELEASED / EXPIRED、実行中はSTOPが必要"
+        ],
+        [
+          "時計",
+          "TTL 30〜300秒、既定60秒"
+        ]
+      ]
+    },
+    {
+      "id": "workshop-execution",
+      "title": "保存プログラムを実行",
+      "kind": "server",
+      "summary": "所有者・版・予約・機体を一括で照合する。",
+      "body": "stationTokenで通常実行を開始する。プログラムと予約の所有者が一致し、版と期限と機体の準備が有効なら、展開済み命令とcalibrationを共通実行表へ固定し、予約をIN_USEにする。同一requestIdの再送は同じ実行を返す。",
+      "inputs": [
+        "programId / programVersion",
+        "reservationId / requestId"
+      ],
+      "outputs": [
+        "executionId / executionSequence / QUEUED"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/workshop.py",
+          "find": "def create_execution("
+        },
+        {
+          "path": "apps/server/app/executions.py",
+          "find": "def _insert_execution("
+        }
+      ],
+      "flow": [
+        {
+          "label": "所有者・版・期限・空きを照合",
+          "code": "BEGIN IMMEDIATE"
+        },
+        {
+          "label": "命令と調整値を固定",
+          "code": "INSERT executions"
+        },
+        {
+          "label": "実行と占有を同時確定",
+          "code": "reservation → IN_USE"
+        }
+      ],
+      "facts": [
+        [
+          "版の不一致",
+          "409 PROGRAM_VERSION_CONFLICT"
+        ],
+        [
+          "所有者不一致",
+          "409 PROGRAM_RESERVATION_MISMATCH"
+        ],
+        [
+          "時間上限",
+          "422。予約は未使用のまま"
+        ]
+      ]
+    },
+    {
+      "id": "history",
+      "title": "履歴・所有者のSTOP",
+      "kind": "server",
+      "summary": "参加者は自分の実行だけを確認・停止する。",
+      "body": "GET一覧・単体取得・STOPは参加者本人または運営者が行う。QUEUEDは即取消し、配信後はSTOP_REQUESTEDで機体の終端報告を待つ。停止要求だけでは占有を解放しない。再起動後も同じ条件で保持する。",
+      "inputs": [
+        "sessionToken または stationToken",
+        "executionId"
+      ],
+      "outputs": [
+        "実行状態 / エラー / 命令位置"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/workshop.py",
+          "find": "def get_execution("
+        },
+        {
+          "path": "apps/server/app/workshop.py",
+          "find": "def stop_execution("
+        }
+      ],
+      "flow": [
+        {
+          "label": "履歴を取得",
+          "code": "GET /api/executions"
+        },
+        {
+          "label": "停止を要求",
+          "code": "POST /api/executions/{id}/stop"
+        },
+        {
+          "label": "報告後に解放",
+          "code": "STOPPED → FINISHED"
+        }
+      ],
+      "facts": [
+        [
+          "他の参加者",
+          "単体GET / STOPは404"
+        ],
+        [
+          "期限・再起動",
+          "IN_USEは停止・完了確認まで維持"
+        ]
+      ]
+    },
+    {
+      "id": "events",
+      "title": "状態イベント",
+      "kind": "data",
+      "summary": "予約と実行の変化を時系列で保存する。",
+      "body": "予約の作成・更新・失効・占有・解放と、実行状態・命令位置の変化をrobot_eventsへ記録する。stationTokenでafter_id以降を取得できる。入力の秘密トークンは保存しない。機体の現在状態は一覧APIを使う。",
+      "inputs": [
+        "予約 / 実行状態の変化"
+      ],
+      "outputs": [
+        "eventId / eventType / payload"
+      ],
+      "sources": [
+        {
+          "path": "apps/server/app/executions.py",
+          "find": "def _event("
+        },
+        {
+          "path": "apps/server/app/workshop.py",
+          "find": "def robot_events("
+        }
+      ],
+      "flow": [
+        {
+          "label": "変更と同時に記録",
+          "code": "INSERT robot_events"
+        },
+        {
+          "label": "運営者が取得",
+          "code": "GET /api/robot-events"
+        },
+        {
+          "label": "続きを取得",
+          "code": "after_id=<eventId>"
+        }
+      ],
+      "facts": [
+        [
+          "並び順",
+          "eventIdの昇順"
+        ],
+        [
+          "絞り込み",
+          "robot_id / execution_id"
+        ],
+        [
+          "件数",
+          "既定100、最大500"
+        ]
+      ]
     }
   ],
   "views": [
     {
       "id": "overview",
       "title": "全体構成",
-      "description": "端末・MacBook・ESP32と、Phase 2の試験実行・停止の経路。",
+      "description": "端末・MacBook・ESP32と、Phase 3の保存・予約・実行の構成。",
       "positions": [
         {
           "id": "station",
@@ -1822,7 +2191,7 @@
         {
           "node": "future",
           "title": "次のフェーズ",
-          "text": "予約・Blockly・ASTは未実装。Phase 2の実行エンジンは利用者が実機確認済み。"
+          "text": "保存・予約・ASTは実装済み。「保存と予約」で確認。Blockly画面と3台運用は後続フェーズ。"
         }
       ],
       "groups": [
@@ -2085,9 +2454,159 @@
       "groups": []
     },
     {
+      "id": "workshop",
+      "title": "保存と予約",
+      "description": "参加者の保存から運営者の予約・通常実行、終端確認による解放まで。",
+      "positions": [
+        {
+          "id": "participant",
+          "x": 32,
+          "y": 116
+        },
+        {
+          "id": "program",
+          "x": 384,
+          "y": 116
+        },
+        {
+          "id": "ast",
+          "x": 736,
+          "y": 116
+        },
+        {
+          "id": "reservation",
+          "x": 32,
+          "y": 324
+        },
+        {
+          "id": "workshop-execution",
+          "x": 384,
+          "y": 324
+        },
+        {
+          "id": "execution-table",
+          "x": 736,
+          "y": 324
+        },
+        {
+          "id": "history",
+          "x": 32,
+          "y": 532
+        },
+        {
+          "id": "control",
+          "x": 384,
+          "y": 532
+        },
+        {
+          "id": "events",
+          "x": 736,
+          "y": 532
+        }
+      ],
+      "edges": [
+        {
+          "source": "participant",
+          "target": "program",
+          "label": "参加者として保存",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "program",
+          "target": "ast",
+          "label": "構造と展開数を検証",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "participant",
+          "target": "reservation",
+          "label": "運営者が参加者を指定",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "reservation",
+          "target": "workshop-execution",
+          "label": "有効予約を照合",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "ast",
+          "target": "workshop-execution",
+          "label": "展開済み命令",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "workshop-execution",
+          "target": "execution-table",
+          "label": "版・命令・調整値を固定",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "control",
+          "target": "execution-table",
+          "label": "配信・終端を保存",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "history",
+          "target": "execution-table",
+          "label": "所有者の確認 / STOP",
+          "kind": "data",
+          "description": ""
+        },
+        {
+          "source": "execution-table",
+          "target": "events",
+          "label": "状態と位置の変化",
+          "kind": "data",
+          "description": ""
+        }
+      ],
+      "steps": [
+        {
+          "node": "participant",
+          "title": "参加者を発行",
+          "text": "運営者がトークンを発行し、本人の保存と履歴に権限を限定する。"
+        },
+        {
+          "node": "program",
+          "title": "保存して版を確定",
+          "text": "workspaceとASTを保存。更新はexpectedVersionで競合を防ぐ。"
+        },
+        {
+          "node": "reservation",
+          "title": "機体を予約",
+          "text": "運営者が参加者を指定。未使用だけが期限で失効する。"
+        },
+        {
+          "node": "workshop-execution",
+          "title": "固定して実行",
+          "text": "所有者・版・予約を照合し、命令と調整値をスナップショットにする。"
+        },
+        {
+          "node": "control",
+          "title": "終端を確認",
+          "text": "Phase 2と共通の通信。停止・完了の確定後に予約を解放する。"
+        },
+        {
+          "node": "events",
+          "title": "履歴を追う",
+          "text": "運営者は予約と実行状態の変化をeventId順に確認する。"
+        }
+      ],
+      "groups": []
+    },
+    {
       "id": "execution",
       "title": "実行と停止",
-      "description": "試験受付から、1回限りの配信・永続化・GPIO出力・停止まで。",
+      "description": "試験・通常実行に共通する、1回限りの配信・永続化・GPIO出力・停止。",
       "positions": [
         {
           "id": "test-api",

@@ -15,6 +15,10 @@ SOURCES = (
     "apps/server/app/store.py",
     "apps/server/app/execution_models.py",
     "apps/server/app/executions.py",
+    "apps/server/app/workshop.py",
+    "apps/server/app/workshop_models.py",
+    "apps/server/app/workshop_api.py",
+    "apps/server/tests/test_workshop.py",
     "apps/server/tests/test_executions.py",
     "apps/server/pyproject.toml",
     "apps/server/uv.lock",
@@ -42,6 +46,7 @@ SOURCES = (
     "docs/protocol.md",
     "docs/phase-1-verification.md",
     "docs/phase-2-verification.md",
+    "docs/phase-3-verification.md",
     "docs/system-design.md",
 )
 

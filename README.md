@@ -8,14 +8,15 @@
 
 Phase 1の通信基盤は実機確認済みです。Phase 2ではMOVE・TURN・WAITの順次実行、
 個体別キャリブレーション、STOP、通信異常時の停止、再実行防止と運営者向け試験APIを追加しました。
-Phase 2は2026年11月19日に利用者が実機確認を完了しました。予約・プログラム保存・Blocklyは後続フェーズです。
+Phase 2は2026年11月19日に利用者が実機確認を完了しました。Phase 3では参加者セッション、プログラム保存、REPEAT展開、予約、通常実行と履歴を追加しました。
+Phase 3は2026年11月20日に利用者が予約から実行完了までの実機確認を完了しました。Blocklyの画面はPhase 4で追加します。
 
-[Phase 1の記録](docs/phase-1-verification.md) と [Phase 2の試験手順](docs/phase-2-verification.md) を参照してください。
+[Phase 1の記録](docs/phase-1-verification.md) と [Phase 2の試験手順](docs/phase-2-verification.md)、[Phase 3の確認手順](docs/phase-3-verification.md) を参照してください。
 
 ## システムマップ
 
 [閲覧ページ](docs/system-map/index.html) で、全体構成、起動と設定、登録と制御通信、実行と停止、
-接続状態と復旧、ファイル索引を確認できます。要素を選ぶと、設定の意味と該当コードを表示します。
+保存と予約、接続状態と復旧、ファイル索引を確認できます。要素を選ぶと、設定の意味と該当コードを表示します。
 [読み方と更新方法](docs/system-map/README.md) も参照してください。
 
 ## APIサーバーの起動
@@ -24,7 +25,7 @@ Python 3.11以上、uvを使用します。以下はリポジトリのルート�
 
 ```sh
 uv sync --project apps/server --locked
-cp config/local.example.json config/local.json
+cp -n config/local.example.json config/local.json
 ```
 
 `config/local.json` の `stationToken` と各ロボットの `token` を、個別に生成した
@@ -47,18 +48,30 @@ uv run --locked uvicorn app.main:app --host 0.0.0.0 --port 8000
 同じDBを共有する構成には未対応です。開発時の `--reload` は再登録を発生させます。
 
 - `GET /api/health`：起動確認（認証不要）
-- `GET /api/robots`：個体一覧（`Authorization: Bearer <stationToken>` が必要）
+- `GET /api/robots`：個体一覧（stationTokenまたは有効な参加者sessionTokenが必要）
 - `/docs`：API仕様と試験用フォーム。右上のAuthorizeでトークンを入力できます。
 
 既定のDBはルートの `data/workshop.sqlite3` です。
 `WORKSHOP_CONFIG` と `WORKSHOP_DB` 環境変数でそれぞれの保存先を変更できます。
-起動時に既知の接続をすべてOFFLINEに戻し、個体情報は保持します。
+起動時に既知の接続をすべてOFFLINEに戻し、個体情報・保存プログラム・履歴は保持します。
+Phase 2のDBは起動時に共通のexecutions表へ自動移行します。実行番号も引き継ぐためDBの削除は不要です。
 設定から除いたロボットは一覧・認証の対象から外れます。
+
+## Phase 3の操作
+
+運営者が `/api/sessions` で参加者用のsessionTokenを発行し、参加者が `/api/programs` へ保存します。
+運営者が `/api/robots/{robot_id}/reservations` でその参加者の機体を予約し、
+`/api/executions` で保存済みバージョンを実行します。参加者は自分の履歴とSTOPを操作できます。
+
+予約は既定60秒で失効しますが、実行受付後は停止・完了確認まで占有を保持します。
+設定の `reservationTtlSeconds`（30〜300秒）と `participantSessionTtlSeconds`（300〜86400秒、既定8時間）は省略可能です。
+既存の個体設定・走行調整値をそのまま利用できます。Phase 3でESP32の再書き込みは不要です。
+サーバーの再起動後、[確認手順](docs/phase-3-verification.md) に沿って試してください。
 
 ## ESP32ファームウェア
 
 ```sh
-cp firmware/include/robot_config.example.h firmware/include/robot_config.h
+cp -n firmware/include/robot_config.example.h firmware/include/robot_config.h
 ```
 
 `robot_config.h` を個体に合わせて編集します。
