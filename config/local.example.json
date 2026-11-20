@@ -1,5 +1,7 @@
 {
   "stationToken": "replace-with-a-unique-random-station-token",
+  "reservationTtlSeconds": 60,
+  "participantSessionTtlSeconds": 28800,
   "robots": [
     {
       "id": "robot-01",

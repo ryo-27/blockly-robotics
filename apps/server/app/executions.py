@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import time
 from uuid import uuid4
 
 from app.config import WorkshopConfig
@@ -26,8 +27,19 @@ class ExecutionStore(Store):
     def initialize(self, config: WorkshopConfig):
         super().initialize(config)
         with self.connection() as conn:
+            tables = {
+                row["name"]
+                for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+            if "test_executions" in tables and "executions" in tables:
+                raise RuntimeError(
+                    "Both legacy and current execution tables exist; migration requires inspection"
+                )
+            if "test_executions" in tables:
+                # 表の改名はAUTOINCREMENTの採番位置も引き継ぎ、消費済み番号を再利用しない。
+                conn.execute("ALTER TABLE test_executions RENAME TO executions")
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS test_executions (
+                CREATE TABLE IF NOT EXISTS executions (
                     execution_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                     id TEXT NOT NULL UNIQUE,
                     request_id TEXT NOT NULL UNIQUE,
@@ -43,14 +55,41 @@ class ExecutionStore(Store):
                     completed_at REAL
                 )
             """)
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(executions)")}
+            for name, definition in {
+                "kind": "TEXT NOT NULL DEFAULT 'TEST'",
+                "participant_session_id": "TEXT",
+                "program_id": "TEXT",
+                "program_version": "INTEGER",
+                "reservation_id": "TEXT",
+                "started_at": "REAL",
+            }.items():
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE executions ADD COLUMN {name} {definition}")
+            conn.execute("DROP INDEX IF EXISTS one_active_test_per_robot")
             conn.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS one_active_test_per_robot
-                ON test_executions(robot_id)
+                CREATE TABLE IF NOT EXISTS robot_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    robot_id TEXT NOT NULL,
+                    execution_id TEXT,
+                    event_type TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at REAL NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS events_by_robot ON robot_events(robot_id, id)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS events_by_execution ON robot_events(execution_id, id)"
+            )
+            conn.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS one_active_execution_per_robot
+                ON executions(robot_id)
                 WHERE status IN ('QUEUED', 'DISPATCHED', 'RUNNING', 'STOP_REQUESTED')
             """)
-            conn.execute("""UPDATE test_executions SET status='STOP_REQUESTED',
-                         error_code='SERVER_RESTARTED' WHERE status IN
-                         ('QUEUED', 'DISPATCHED', 'RUNNING')""")
+            for run in conn.execute(
+                "SELECT * FROM executions WHERE status IN ('QUEUED','DISPATCHED','RUNNING')"
+            ).fetchall():
+                self._transition(conn, run, "STOP_REQUESTED", None, error="SERVER_RESTARTED")
 
     def register(self, robot_id: str, boot_id: str, firmware: str, now: float) -> str:
         with self.connection() as conn:
@@ -60,12 +99,11 @@ class ExecutionStore(Store):
             session = session or str(uuid4())
             same = session == old_session
             if not same:
-                conn.execute(
-                    """UPDATE test_executions SET status='STOP_REQUESTED',
-                    error_code='SESSION_CHANGED' WHERE robot_id=? AND status IN
-                    ('QUEUED', 'DISPATCHED', 'RUNNING')""",
+                for run in conn.execute(
+                    "SELECT * FROM executions WHERE robot_id=? AND status IN ('QUEUED','DISPATCHED','RUNNING')",
                     (robot_id,),
-                )
+                ).fetchall():
+                    self._transition(conn, run, "STOP_REQUESTED", now, error="SESSION_CHANGED")
             conn.execute(
                 """UPDATE robots SET boot_id=?, session_id=?, sequence=?,
                 last_seen=?, firmware_version=?, agent_protocol=?, agent_status=?, last_control=?
@@ -87,7 +125,7 @@ class ExecutionStore(Store):
     @staticmethod
     def _active(conn: sqlite3.Connection, robot_id: str):
         return conn.execute(
-            """SELECT * FROM test_executions WHERE robot_id=? AND status IN
+            """SELECT * FROM executions WHERE robot_id=? AND status IN
                 ('QUEUED', 'DISPATCHED', 'RUNNING', 'STOP_REQUESTED')""",
             (robot_id,),
         ).fetchone()
@@ -96,81 +134,172 @@ class ExecutionStore(Store):
     def _view(row: sqlite3.Row) -> dict:
         return dict(row) | {"execution_id": row["id"]}
 
+    @staticmethod
+    def _event(
+        conn, robot_id: str, execution_id: str | None, event_type: str, payload: dict, now: float
+    ):
+        conn.execute(
+            "INSERT INTO robot_events (robot_id, execution_id, event_type, payload, created_at) VALUES (?, ?, ?, ?, ?)",
+            (robot_id, execution_id, event_type, json.dumps(payload, sort_keys=True), now),
+        )
+
+    def _terminal(self, conn, row, now: float):
+        """予約のある実行では、終端保存と予約解放を同じトランザクションで行う。"""
+
+    def _transition(
+        self,
+        conn,
+        row,
+        status: str,
+        now: float | None,
+        index: int | None = None,
+        error: str | None = None,
+    ):
+        at = time.time() if now is None else now
+        command_index = row["current_command_index"] if index is None else index
+        changed = (
+            status != row["status"]
+            or command_index != row["current_command_index"]
+            or error != row["error_code"]
+        )
+        started = row["started_at"]
+        if status == "RUNNING" and started is None:
+            started = at
+        completed = at if status in TERMINAL_STATUSES else row["completed_at"]
+        conn.execute(
+            "UPDATE executions SET status=?, current_command_index=?, error_code=?, started_at=?, completed_at=? WHERE id=?",
+            (status, command_index, error, started, completed, row["id"]),
+        )
+        if changed:
+            self._event(
+                conn,
+                row["robot_id"],
+                row["id"],
+                "EXECUTION_STATUS",
+                {
+                    "from": row["status"],
+                    "to": status,
+                    "currentCommandIndex": command_index,
+                    "errorCode": error,
+                },
+                at,
+            )
+        if status in TERMINAL_STATUSES:
+            self._terminal(conn, row, at)
+
+    def _ready_robot(self, conn, robot_id: str, now: float):
+        robot = conn.execute(
+            "SELECT * FROM robots WHERE id=? AND enabled=1", (robot_id,)
+        ).fetchone()
+        if robot is None:
+            raise ExecutionError("ROBOT_NOT_FOUND", 404)
+        if not robot["motion_enabled"]:
+            raise ExecutionError("MOTION_DISABLED", 403)
+        if (
+            robot["last_control"] is None
+            or not 0 <= now - robot["last_control"] < OFFLINE_AFTER_SECONDS
+        ):
+            raise ExecutionError("ROBOT_NOT_READY")
+        if robot["agent_status"] != "IDLE" or self._active(conn, robot_id) is not None:
+            raise ExecutionError("ROBOT_BUSY")
+        return robot
+
+    def _before_test(self, conn, robot_id: str, now: float):
+        """参加者用の予約を導入した保存層で、試験APIの競合も検査する。"""
+
+    def _insert_execution(
+        self,
+        conn,
+        robot,
+        request_id: str,
+        commands,
+        now: float,
+        kind: str = "TEST",
+        participant_session_id=None,
+        program_id=None,
+        program_version=None,
+        reservation_id=None,
+    ):
+        calibration = Calibration.model_validate_json(robot["calibration"])
+        try:
+            duration = execution_duration(commands, calibration)
+        except ValueError as error:
+            raise ExecutionError(str(error), 422) from error
+        identifier = str(uuid4())
+        encoded = json.dumps([c.model_dump(by_alias=True) for c in commands], sort_keys=True)
+        conn.execute(
+            """INSERT INTO executions (id, request_id, robot_id, session_id, commands,
+            calibration, status, estimated_duration_ms, created_at, kind, participant_session_id,
+            program_id, program_version, reservation_id) VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                identifier,
+                request_id,
+                robot["id"],
+                robot["session_id"],
+                encoded,
+                calibration.model_dump_json(by_alias=True),
+                duration,
+                now,
+                kind,
+                participant_session_id,
+                program_id,
+                program_version,
+                reservation_id,
+            ),
+        )
+        row = conn.execute("SELECT * FROM executions WHERE id=?", (identifier,)).fetchone()
+        if row["execution_sequence"] > 2147483647:
+            raise ExecutionError("EXECUTION_SEQUENCE_EXHAUSTED")
+        self._event(
+            conn,
+            robot["id"],
+            identifier,
+            "EXECUTION_CREATED",
+            {"kind": kind, "status": "QUEUED"},
+            now,
+        )
+        return self._view(row)
+
     def create_test(self, robot_id: str, request: TestExecutionRequest, now: float) -> dict:
-        commands = json.dumps(
+        encoded = json.dumps(
             [c.model_dump(by_alias=True) for c in request.commands], sort_keys=True
         )
         with self.connection() as conn:
             old = conn.execute(
-                "SELECT * FROM test_executions WHERE request_id=?", (str(request.request_id),)
+                "SELECT * FROM executions WHERE request_id=?", (str(request.request_id),)
             ).fetchone()
             if old is not None:
-                if old["robot_id"] != robot_id or old["commands"] != commands:
+                if (
+                    old["kind"] != "TEST"
+                    or old["robot_id"] != robot_id
+                    or old["commands"] != encoded
+                ):
                     raise ExecutionError("IDEMPOTENCY_CONFLICT")
                 return self._view(old)
-            robot = conn.execute(
-                "SELECT * FROM robots WHERE id=? AND enabled=1", (robot_id,)
-            ).fetchone()
-            if robot is None:
-                raise ExecutionError("ROBOT_NOT_FOUND", 404)
-            if not robot["motion_enabled"]:
-                raise ExecutionError("MOTION_DISABLED", 403)
-            if (
-                robot["last_control"] is None
-                or not 0 <= now - robot["last_control"] < OFFLINE_AFTER_SECONDS
-            ):
-                raise ExecutionError("ROBOT_NOT_READY")
-            if robot["agent_status"] != "IDLE" or self._active(conn, robot_id) is not None:
-                raise ExecutionError("ROBOT_BUSY")
-            calibration = Calibration.model_validate_json(robot["calibration"])
-            try:
-                duration = execution_duration(request.commands, calibration)
-            except ValueError as error:
-                raise ExecutionError(str(error), 422) from error
-            identifier = str(uuid4())
-            conn.execute(
-                """INSERT INTO test_executions
-                (id, request_id, robot_id, session_id, commands, calibration, status,
-                 estimated_duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, 'QUEUED', ?, ?)""",
-                (
-                    identifier,
-                    str(request.request_id),
-                    robot_id,
-                    robot["session_id"],
-                    commands,
-                    calibration.model_dump_json(by_alias=True),
-                    duration,
-                    now,
-                ),
+            self._before_test(conn, robot_id, now)
+            robot = self._ready_robot(conn, robot_id, now)
+            return self._insert_execution(
+                conn, robot, str(request.request_id), request.commands, now
             )
-            row = conn.execute("SELECT * FROM test_executions WHERE id=?", (identifier,)).fetchone()
-            if row["execution_sequence"] > 2147483647:
-                raise ExecutionError("EXECUTION_SEQUENCE_EXHAUSTED")
-            return self._view(row)
 
     def get_test(self, identifier: str) -> dict:
         with self.connection() as conn:
-            row = conn.execute("SELECT * FROM test_executions WHERE id=?", (identifier,)).fetchone()
+            row = conn.execute("SELECT * FROM executions WHERE id=?", (identifier,)).fetchone()
             if row is None:
                 raise ExecutionError("EXECUTION_NOT_FOUND", 404)
             return self._view(row)
 
     def stop_test(self, identifier: str, now: float) -> dict:
         with self.connection() as conn:
-            row = conn.execute("SELECT * FROM test_executions WHERE id=?", (identifier,)).fetchone()
+            row = conn.execute("SELECT * FROM executions WHERE id=?", (identifier,)).fetchone()
             if row is None:
                 raise ExecutionError("EXECUTION_NOT_FOUND", 404)
             if row["status"] == "QUEUED":
-                conn.execute(
-                    "UPDATE test_executions SET status='STOPPED', completed_at=? WHERE id=?",
-                    (now, identifier),
-                )
+                self._transition(conn, row, "STOPPED", now, error="STOP_REQUESTED")
             elif row["status"] in ACTIVE_STATUSES:
-                conn.execute(
-                    "UPDATE test_executions SET status='STOP_REQUESTED' WHERE id=?", (identifier,)
-                )
+                self._transition(conn, row, "STOP_REQUESTED", now, error="STOP_REQUESTED")
             return self._view(
-                conn.execute("SELECT * FROM test_executions WHERE id=?", (identifier,)).fetchone()
+                conn.execute("SELECT * FROM executions WHERE id=?", (identifier,)).fetchone()
             )
 
     def control(self, robot_id: str, body: ControlRequest, now: float) -> ControlResponse:
@@ -191,7 +320,7 @@ class ExecutionStore(Store):
                 None
                 if body.execution_id is None
                 else conn.execute(
-                    "SELECT * FROM test_executions WHERE id=? AND robot_id=?",
+                    "SELECT * FROM executions WHERE id=? AND robot_id=?",
                     (str(body.execution_id), robot_id),
                 ).fetchone()
             )
@@ -206,16 +335,13 @@ class ExecutionStore(Store):
                 ):
                     raise SessionConflict("INVALID_COMPLETION")
                 if reported["status"] in ACTIVE_STATUSES:
-                    conn.execute(
-                        """UPDATE test_executions SET status=?, current_command_index=?,
-                        error_code=?, completed_at=? WHERE id=?""",
-                        (
-                            body.status,
-                            body.current_command_index,
-                            body.error_code,
-                            now,
-                            reported["id"],
-                        ),
+                    self._transition(
+                        conn,
+                        reported,
+                        body.status,
+                        now,
+                        index=body.current_command_index,
+                        error=body.error_code,
                     )
                 return ControlResponse(**response, action="ACK", execution_id=body.execution_id)
             if active is None:
@@ -243,18 +369,15 @@ class ExecutionStore(Store):
                 or not robot["motion_enabled"]
             ):
                 run["status"] = "STOP_REQUESTED"
-                conn.execute(
-                    "UPDATE test_executions SET status='STOP_REQUESTED' WHERE id=?", (run["id"],)
-                )
+                self._transition(conn, active, "STOP_REQUESTED", now, error="STOP_REQUESTED")
+                active = dict(active) | {"status": "STOP_REQUESTED", "error_code": "STOP_REQUESTED"}
             common = response | {
                 "execution_id": run["id"],
                 "execution_sequence": run["execution_sequence"],
             }
             if body.status == "IDLE":
                 if run["status"] == "QUEUED":
-                    conn.execute(
-                        "UPDATE test_executions SET status='DISPATCHED' WHERE id=?", (run["id"],)
-                    )
+                    self._transition(conn, active, "DISPATCHED", now)
                     return ControlResponse(
                         **common,
                         action="START",
@@ -263,9 +386,7 @@ class ExecutionStore(Store):
                         calibration=json.loads(run["calibration"]),
                     )
                 # STARTの再配信はしない。未確認の実行は停止確認まで占有する。
-                conn.execute(
-                    "UPDATE test_executions SET status='STOP_REQUESTED' WHERE id=?", (run["id"],)
-                )
+                self._transition(conn, active, "STOP_REQUESTED", now, error="STOP_REQUESTED")
                 return ControlResponse(**common, action="STOP")
             if str(body.execution_id) != run["id"] or run["status"] not in (
                 "DISPATCHED",
@@ -277,10 +398,7 @@ class ExecutionStore(Store):
                 or body.current_command_index < run["current_command_index"]
             ):
                 raise SessionConflict("INVALID_COMMAND_INDEX")
-            conn.execute(
-                "UPDATE test_executions SET status='RUNNING', current_command_index=? WHERE id=?",
-                (body.current_command_index, run["id"]),
-            )
+            self._transition(conn, active, "RUNNING", now, index=body.current_command_index)
             return ControlResponse(**common, action="CONTINUE", lease_ms=LEASE_MS)
 
     def list_robots(self, now: float) -> list[dict]:

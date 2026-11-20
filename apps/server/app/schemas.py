@@ -42,3 +42,8 @@ class RobotView(Message):
     motion_enabled: bool = False
     execution_id: UUID | None = None
     execution_status: str | None = None
+    availability: Literal[
+        "OFFLINE", "UNAVAILABLE", "IDLE", "RESERVED", "READY", "RUNNING", "STOPPING"
+    ] = "UNAVAILABLE"
+    available: bool = False
+    reservation_id: UUID | None = None

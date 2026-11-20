@@ -33,6 +33,12 @@ def check_token(value: SecretStr) -> None:
 class WorkshopConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     station_token: SecretStr = Field(alias="stationToken")
+    reservation_ttl_seconds: int = Field(
+        default=60, alias="reservationTtlSeconds", strict=True, ge=30, le=300
+    )
+    participant_session_ttl_seconds: int = Field(
+        default=28800, alias="participantSessionTtlSeconds", strict=True, ge=300, le=86400
+    )
     robots: list[RobotConfig] = Field(min_length=1)
 
     @field_validator("station_token")

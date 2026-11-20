@@ -10,6 +10,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config import REPOSITORY_ROOT, WorkshopConfig, load_config
@@ -19,9 +20,12 @@ from app.execution_models import (
     TestExecutionRequest,
     TestExecutionView,
 )
-from app.executions import ExecutionError, ExecutionStore
+from app.executions import ExecutionError
 from app.schemas import AgentResponse, HeartbeatRequest, RegisterRequest, RobotView
 from app.store import SessionConflict, token_digest
+from app.workshop import WorkshopStore
+from app.workshop_api import workshop_router
+from app.workshop_models import Principal
 
 bearer = HTTPBearer(auto_error=False)
 Credentials = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
@@ -32,7 +36,7 @@ def create_app(
     db_path: Path | None = None,
     clock: Callable[[], float] = time.time,
 ) -> FastAPI:
-    store = ExecutionStore(
+    store = WorkshopStore(
         db_path
         or Path(os.environ.get("WORKSHOP_DB", str(REPOSITORY_ROOT / "data/workshop.sqlite3")))
     )
@@ -44,7 +48,7 @@ def create_app(
         application.state.settings = settings
         yield
 
-    api = FastAPI(title="Robot Workshop API", version="0.2.0", lifespan=lifespan)
+    api = FastAPI(title="Robot Workshop API", version="0.3.0", lifespan=lifespan)
 
     @api.exception_handler(RequestValidationError)
     async def validation_error(request: Request, error: RequestValidationError):
@@ -56,6 +60,10 @@ def create_app(
             # 入力値・資格情報を出さず、拒否した項目と検証の種類だけを記録する。
             logging.getLogger(__name__).warning("Robot control report rejected: %s", fields)
         return await request_validation_exception_handler(request, error)
+
+    @api.exception_handler(ExecutionError)
+    async def execution_error(request: Request, error: ExecutionError):
+        return JSONResponse(status_code=error.status_code, content={"detail": error.code})
 
     def require_token(credentials: Credentials) -> str:
         if credentials is None:
@@ -75,11 +83,22 @@ def create_app(
         if not hmac.compare_digest(token_digest(token), token_digest(expected)):
             raise HTTPException(403, "STATION_ACCESS_REQUIRED")
 
+    def require_client(token: Annotated[str, Depends(require_token)]) -> Principal:
+        expected = api.state.settings.station_token.get_secret_value()
+        if hmac.compare_digest(token_digest(token), token_digest(expected)):
+            return Principal("STATION")
+        owner = store.authenticate_session(token, clock())
+        if owner is None:
+            if store.authenticate(token) is not None:
+                raise HTTPException(403, "CLIENT_ACCESS_REQUIRED")
+            raise HTTPException(401, "INVALID_SESSION_TOKEN")
+        return Principal("PARTICIPANT", owner)
+
     @api.get("/api/health")
     def health():
-        return {"status": "ok", "protocolVersion": 1, "phase": 2}
+        return {"status": "ok", "protocolVersion": 1, "phase": 3}
 
-    @api.get("/api/robots", response_model=list[RobotView], dependencies=[Depends(require_station)])
+    @api.get("/api/robots", response_model=list[RobotView], dependencies=[Depends(require_client)])
     def robots():
         return store.list_robots(clock())
 
@@ -140,6 +159,7 @@ def create_app(
         except ExecutionError as error:
             raise HTTPException(error.status_code, error.code) from error
 
+    api.include_router(workshop_router(store, clock, require_client, require_station))
     return api
 
 
